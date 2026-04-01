@@ -130,7 +130,7 @@ print_banner() {
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════╗"
     echo "  ║          🐠  CLOWNFISCHSERVER  INSTALLER             ║"
-    echo "  ║              v0.4.0  |  GPL-3.0                      ║"
+    echo "  ║              v0.4.1  |  GPL-3.0                      ║"
     echo "  ╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo -e "  Willkommen! Dieses Script richtet deinen"
@@ -272,19 +272,23 @@ step_ssh() {
     cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
     ok "sshd_config gesichert"
 
-    # SSH bleibt offen – Passwort UND Key erlaubt
-    cat > /etc/ssh/sshd_config << SSHEOF
-Port 22
-Protocol 2
-PermitRootLogin yes
-PasswordAuthentication yes
-PubkeyAuthentication yes
-AuthorizedKeysFile .ssh/authorized_keys
-X11Forwarding no
-MaxAuthTries 6
-ClientAliveInterval 300
-ClientAliveCountMax 2
-SSHEOF
+    # SSH – nur gezielt aendern, bestehende Config behalten!
+    info "Passe sshd_config an (bestehende Einstellungen bleiben erhalten)..."
+
+    _sshd_set() {
+        local key="$1" val="$2"
+        if grep -qE "^#?\s*${key}" /etc/ssh/sshd_config; then
+            sed -i "s|^#\?\s*${key}.*|${key} ${val}|" /etc/ssh/sshd_config
+        else
+            echo "${key} ${val}" >> /etc/ssh/sshd_config
+        fi
+    }
+
+    _sshd_set "PasswordAuthentication" "yes"
+    _sshd_set "PubkeyAuthentication"   "yes"
+    _sshd_set "X11Forwarding"          "no"
+    _sshd_set "PermitRootLogin"        "yes"
+    ok "sshd_config angepasst (nur relevante Zeilen geaendert)"
 
     systemctl restart sshd >> "$LOG_FILE" 2>&1
     ok "SSH läuft – Passwort + Key erlaubt"
@@ -302,10 +306,32 @@ SSHEOF
             # knockd
             IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
             NOTIFY_CMD="$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/bot/knock_notify.py"
-            cat > /etc/knockd.conf << KNOCKEOF
+
+            # knockd – nur clownfisch-Sektionen schreiben, bestehende Config behalten
+            if [ -f /etc/knockd.conf ]; then
+                # Entferne nur unsere alten Sektionen falls vorhanden
+                sed -i '/^\[openSSH\]/,/^$/d' /etc/knockd.conf 2>/dev/null || true
+                sed -i '/^\[closeSSH\]/,/^$/d' /etc/knockd.conf 2>/dev/null || true
+                # Interface in [options] setzen falls vorhanden
+                if grep -q "^\[options\]" /etc/knockd.conf; then
+                    grep -q "Interface" /etc/knockd.conf ||                         sed -i "/^\[options\]/a\    Interface = $IFACE" /etc/knockd.conf
+                else
+                    echo -e "[options]
+    UseSyslog
+    Interface = $IFACE
+" >> /etc/knockd.conf
+                fi
+            else
+                # Neue Config anlegen
+                cat > /etc/knockd.conf << KNOCKEOF
 [options]
     UseSyslog
     Interface = $IFACE
+KNOCKEOF
+            fi
+
+            # Unsere SSH-Sektionen hinzufuegen
+            cat >> /etc/knockd.conf << KNOCKEOF
 
 [openSSH]
     sequence    = 7000,8000,9000
@@ -563,7 +589,7 @@ print_summary() {
     echo ""
     echo -e "${GREEN}${BOLD}"
     echo "  +======================================================+"
-    echo "  |        CLOWNFISCHSERVER BEREIT!  v0.4.0              |"
+    echo "  |        CLOWNFISCHSERVER BEREIT!  v0.4.1              |"
     echo "  +======================================================+"
     echo -e "${NC}"
     echo -e "  ${BOLD}Server:${NC}      $SERVER_IP"
@@ -642,7 +668,7 @@ main() {
         esac
     fi
 
-    log "=== Clownfischserver v0.4.0 Installation gestartet ==="
+    log "=== Clownfischserver v0.4.1 Installation gestartet ==="
     step_checks
     step_packages
     step_user
