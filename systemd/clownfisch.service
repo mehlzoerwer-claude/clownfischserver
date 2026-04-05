@@ -1,9 +1,8 @@
 [Unit]
 Description=🐠 Clownfischserver Telegram Bot
-Documentation=https://github.com/YOUR_USERNAME/clownfischserver
+Documentation=https://github.com/mehlzoerwer-claude/clownfischserver
 After=network-online.target ollama.service
-Wants=network-online.target
-Requires=ollama.service
+Wants=network-online.target ollama.service
 
 [Service]
 Type=simple
@@ -18,8 +17,9 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=clownfisch
 
-# Security
-NoNewPrivileges=yes
+# Security – allow sudo and iptables for SSH management
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
+SecureBits=keep-caps
 PrivateTmp=yes
 
 [Install]

@@ -8,7 +8,7 @@
 # =============================================================================
 
 # GPL-3.0 License - Keep it open. Always.
-# https://github.com/YOUR_USERNAME/clownfischserver
+# https://github.com/mehlzoerwer-claude/clownfischserver
 
 # --- Colors ---
 RED='\033[0;31m'
@@ -92,32 +92,6 @@ spinner() {
 run_with_spinner() {
     local msg=$1
     shift
-    "$@" >> "$LOG_FILE" 2>&1 &
-    local pid=$!
-    spinner "$pid" "$msg"
-    wait "$pid"
-    return $?
-}
-
-
-progress_bar() {
-    local current=$1
-    local total=$2
-    local msg=$3
-    local width=40
-    local pct=$(( current * 100 / total ))
-    local filled=$(( current * width / total ))
-    local empty=$(( width - filled ))
-    local bar=""
-    for ((i=0; i<filled; i++)); do bar+="█"; done
-    for ((i=0; i<empty; i++));  do bar+="░"; done
-    echo -ne "  ${CYAN}[${bar}]${NC} ${pct}% ${msg}
-"
-}
-
-run_with_spinner() {
-    local msg=$1
-    shift
     ("$@" >> "$LOG_FILE" 2>&1) &
     local pid=$!
     spinner "$pid" "$msg"
@@ -130,7 +104,7 @@ print_banner() {
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════╗"
     echo "  ║          🐠  CLOWNFISCHSERVER  INSTALLER             ║"
-    echo "  ║              v0.4.1  |  GPL-3.0                      ║"
+    echo "  ║              v0.4.11  |  GPL-3.0                      ║"
     echo "  ╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo -e "  Willkommen! Dieses Script richtet deinen"
@@ -362,6 +336,42 @@ KNOCKEOF
     esac
 }
 
+# HELPER: Pull an Ollama model with progress bar
+
+_pull_model() {
+    local model_name="$1"
+    echo ""
+    echo -e "  ${CYAN}Lade Modell: ${BOLD}$model_name${NC}"
+    echo -e "  ${CYAN}Das kann je nach Internetgeschwindigkeit 2-10 Minuten dauern.${NC}"
+    echo ""
+
+    tput civis 2>/dev/null
+    ollama pull "$model_name" 2>&1 | while IFS= read -r line; do
+        if [[ "$line" =~ ([0-9]+)% ]]; then
+            pct="${BASH_REMATCH[1]}"
+            filled=$(( pct * 30 / 100 ))
+            empty=$(( 30 - filled ))
+            bar=""
+            for ((i=0; i<filled; i++)); do bar+="="; done
+            for ((i=0; i<empty; i++)); do bar+="."; done
+            printf "\r  [%-30s] %3s%%  " "$bar" "$pct"
+        elif [[ "$line" == *"pulling manifest"* ]]; then
+            printf "\r  Manifest wird geladen...                    "
+        elif [[ "$line" == *"verifying"* ]]; then
+            printf "\r  Verifiziere Modell...                       "
+        elif [[ "$line" == *"writing"* ]]; then
+            printf "\r  Schreibe Modell...                          "
+        elif [[ "$line" == *"success"* ]]; then
+            printf "\r  Download abgeschlossen!                     \n"
+        fi
+    done
+    tput cnorm 2>/dev/null
+    echo ""
+
+    ollama list 2>/dev/null | grep -q "${model_name%%:*}" || fail "Modell konnte nicht geladen werden: $model_name"
+    ok "Modell geladen: $model_name"
+}
+
 # STEP 5: OLLAMA
 
 step_ollama() {
@@ -369,72 +379,123 @@ step_ollama() {
 
     echo ""
     info "Ollama ist die KI die deinen Bot intelligent macht."
-    info "Es läuft komplett lokal auf deinem Server – keine Cloud."
+    info "Es laeuft komplett lokal auf deinem Server – keine Cloud."
 
     if command -v ollama &>/dev/null; then
         warn "Ollama bereits installiert"
     else
-        run_with_spinner "Ollama wird heruntergeladen und installiert"             bash -c "curl -fsSL https://ollama.com/install.sh | sh" || fail "Ollama Installation fehlgeschlagen"
+        run_with_spinner "Ollama wird heruntergeladen und installiert" \
+            bash -c "curl -fsSL https://ollama.com/install.sh | sh" || fail "Ollama Installation fehlgeschlagen"
         ok "Ollama installiert"
     fi
 
     run_with_spinner "Ollama Service starten" systemctl enable ollama
     run_with_spinner "Ollama hochfahren" bash -c "systemctl start ollama && sleep 5"
 
-    # Check existing models
-    OLLAMA_MODEL=$(ollama list 2>/dev/null | awk 'NR>1 {print $1}' | head -1)
+    # ─────────────────────────────────────────────────────────
+    # SCHRITT 1: Coder-Modell (Aider + /shell Befehlsgenerierung)
+    # ─────────────────────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${BOLD}  [1/2] Coder-Modell${NC}"
+    echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  Dieses Modell generiert Code (Aider) und Shell-Befehle (/shell)."
+    echo -e "  Es muss gut programmieren koennen – Deutsch ist hier zweitrangig."
+    echo ""
 
-    if [[ -n "$OLLAMA_MODEL" ]]; then
-        ok "Vorhandenes Modell erkannt: $OLLAMA_MODEL"
+    # RAM-basierte Empfehlung fuer Coder
+    if [[ "$RAM_MB" -ge 16000 ]]; then
+        CODER_DEFAULT="qwen2.5-coder:7b"
+        CODER_HINT="16GB+ RAM erkannt – bestes Code-Modell fuer CPU"
     else
+        CODER_DEFAULT="qwen2.5-coder:3b"
+        CODER_HINT="Kompakt und schnell auf CPU"
+    fi
+
+    echo -e "  ${CYAN}  Dein RAM: ${BOLD}${RAM_MB}MB${NC}"
+    echo -e "  ${CYAN}  Empfehlung: ${BOLD}${CODER_DEFAULT}${NC}  ${CYAN}(${CODER_HINT})${NC}"
+    echo ""
+    echo -e "  ${CYAN}  [1] qwen2.5-coder:3b  – schnell, ~2GB RAM (unter 16GB)${NC}"
+    echo -e "  ${CYAN}  [2] qwen2.5-coder:7b  – stark, ~4.5GB RAM (16GB+ empfohlen)${NC}"
+    echo -e "  ${CYAN}  [3] eigenes Modell eingeben${NC}"
+    echo ""
+    echo -e "  ${YELLOW}?${NC} ${BOLD}Auswahl [1/2/3]:${NC} (Enter = Empfehlung)"
+    read -r -p "    → " CODER_CHOICE
+    case "$CODER_CHOICE" in
+        1) OLLAMA_MODEL="qwen2.5-coder:3b" ;;
+        2) OLLAMA_MODEL="qwen2.5-coder:7b" ;;
+        3) echo -e "  ${YELLOW}?${NC} ${BOLD}Modell-Name:${NC} ${CYAN}z.B. codellama:7b${NC}"
+           read -r -p "    → " OLLAMA_MODEL ;;
+        *) OLLAMA_MODEL="$CODER_DEFAULT" ;;
+    esac
+
+    _pull_model "$OLLAMA_MODEL"
+    ok "Coder-Modell: $OLLAMA_MODEL"
+
+    # ─────────────────────────────────────────────────────────
+    # SCHRITT 2: Chat-Modell (Deutsch, schnelle Antworten)
+    # ─────────────────────────────────────────────────────────
+    OLLAMA_MODEL_FAST=""
+
+    echo ""
+    echo -e "  ${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${BOLD}  [2/2] Chat-Modell (optional)${NC}"
+    echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  Ein separates Chat-Modell antwortet schneller auf Nachrichten"
+    echo -e "  und spricht besser Deutsch. Das Coder-Modell bleibt fuer Code."
+    echo ""
+    echo -e "  ${CYAN}  Coder-Modell:  ${BOLD}$OLLAMA_MODEL${NC}  ${CYAN}(bereits installiert)${NC}"
+    echo ""
+
+    if ask_yn "Separates Chat-Modell installieren? (empfohlen)"; then
         echo ""
-        echo -e "  ${BOLD}Welches KI-Modell soll installiert werden?${NC}"
-        echo -e "  ${CYAN}  Empfehlung je nach RAM:${NC}"
-        echo -e "  ${CYAN}  [1] qwen2.5:2b  – klein,  schnell, ~2GB RAM  (empfohlen für <8GB)${NC}"
-        echo -e "  ${CYAN}  [2] qwen3.5:4b  – größer, schlauer, ~6GB RAM (empfohlen für 8GB+)${NC}"
-        echo -e "  ${CYAN}  [3] eigenes Modell eingeben${NC}"
+
+        # RAM-basierte Empfehlung fuer Chat
+        if [[ "$RAM_MB" -ge 24000 ]]; then
+            CHAT_DEFAULT="mistral:7b"
+            CHAT_HINT="24GB+ RAM – bestes Deutsch (franzoesische KI, exzellent in EU-Sprachen)"
+            echo -e "  ${CYAN}  [1] gemma3:1b    – 800MB RAM, schnell, brauchbares Deutsch${NC}"
+            echo -e "  ${CYAN}  [2] gemma3:4b    – 3GB RAM, sehr gutes Deutsch (Google multilingual)${NC}"
+            echo -e "  ${BOLD}  [3] mistral:7b   – 4.5GB RAM, exzellentes Deutsch ← empfohlen${NC}"
+            echo -e "  ${CYAN}  [4] eigenes Modell eingeben${NC}"
+        elif [[ "$RAM_MB" -ge 12000 ]]; then
+            CHAT_DEFAULT="gemma3:4b"
+            CHAT_HINT="12-20GB RAM – sehr gutes Deutsch bei wenig RAM (Google multilingual)"
+            echo -e "  ${CYAN}  [1] gemma3:1b    – 800MB RAM, schnell, brauchbares Deutsch${NC}"
+            echo -e "  ${BOLD}  [2] gemma3:4b    – 3GB RAM, sehr gutes Deutsch ← empfohlen${NC}"
+            echo -e "  ${CYAN}  [3] mistral:7b   – 4.5GB RAM, exzellentes Deutsch (viel RAM noetig)${NC}"
+            echo -e "  ${CYAN}  [4] eigenes Modell eingeben${NC}"
+        else
+            CHAT_DEFAULT="gemma3:1b"
+            CHAT_HINT="<12GB RAM – klein und schnell, spart RAM fuer System"
+            echo -e "  ${BOLD}  [1] gemma3:1b    – 800MB RAM, schnell, brauchbar ← empfohlen${NC}"
+            echo -e "  ${CYAN}  [2] gemma3:4b    – 3GB RAM, sehr gutes Deutsch (knapp bei <12GB)${NC}"
+            echo -e "  ${CYAN}  [3] mistral:7b   – 4.5GB RAM, exzellentes Deutsch (zu gross!)${NC}"
+            echo -e "  ${CYAN}  [4] eigenes Modell eingeben${NC}"
+        fi
+
         echo ""
-        echo -e "  ${YELLOW}?${NC} ${BOLD}Auswahl [1/2/3]:${NC}"
-        read -r -p "    → " MODEL_CHOICE
-        case "$MODEL_CHOICE" in
-            2) OLLAMA_MODEL="qwen3.5:4b" ;;
-            3) echo -e "  ${YELLOW}?${NC} ${BOLD}Modell-Name:${NC} ${CYAN}z.B. llama3:8b${NC}"
-               read -r -p "    → " OLLAMA_MODEL ;;
-            *) OLLAMA_MODEL="qwen2.5:2b" ;;
+        echo -e "  ${CYAN}  Empfehlung: ${BOLD}${CHAT_DEFAULT}${NC}  ${CYAN}(${CHAT_HINT})${NC}"
+        echo ""
+        echo -e "  ${YELLOW}?${NC} ${BOLD}Auswahl [1/2/3/4]:${NC} (Enter = Empfehlung)"
+        read -r -p "    → " CHAT_CHOICE
+        case "$CHAT_CHOICE" in
+            1) OLLAMA_MODEL_FAST="gemma3:1b" ;;
+            2) OLLAMA_MODEL_FAST="gemma3:4b" ;;
+            3) OLLAMA_MODEL_FAST="mistral:7b" ;;
+            4) echo -e "  ${YELLOW}?${NC} ${BOLD}Modell-Name:${NC} ${CYAN}z.B. llama3.2:3b${NC}"
+               read -r -p "    → " OLLAMA_MODEL_FAST ;;
+            *) OLLAMA_MODEL_FAST="$CHAT_DEFAULT" ;;
         esac
 
+        _pull_model "$OLLAMA_MODEL_FAST"
+        ok "Chat-Modell: $OLLAMA_MODEL_FAST"
         echo ""
-        echo -e "  ${CYAN}Lade Modell: ${BOLD}$OLLAMA_MODEL${NC}"
-        echo -e "  ${CYAN}Das kann je nach Internetgeschwindigkeit 2-10 Minuten dauern.${NC}"
-        echo ""
-
-        # Live progress from ollama pull
-        tput civis 2>/dev/null
-        ollama pull "$OLLAMA_MODEL" 2>&1 | while IFS= read -r line; do
-            if [[ "$line" =~ ([0-9]+)% ]]; then
-                pct="${BASH_REMATCH[1]}"
-                filled=$(( pct * 30 / 100 ))
-                empty=$(( 30 - filled ))
-                bar=""
-                for ((i=0; i<filled; i++)); do bar+="="; done
-                for ((i=0; i<empty; i++)); do bar+="."; done
-                printf "\r  [%-30s] %3s%%  " "$bar" "$pct"
-            elif [[ "$line" == *"pulling manifest"* ]]; then
-                printf "\r  Manifest wird geladen...                    "
-            elif [[ "$line" == *"verifying"* ]]; then
-                printf "\r  Verifiziere Modell...                       "
-            elif [[ "$line" == *"writing"* ]]; then
-                printf "\r  Schreibe Modell...                          "
-            elif [[ "$line" == *"success"* ]]; then
-                printf "\r  Download abgeschlossen!                     \n"
-            fi
-        done
-        tput cnorm 2>/dev/null
-        echo ""
-
-        # Verify
-        ollama list 2>/dev/null | grep -q "${OLLAMA_MODEL%%:*}" || fail "Modell konnte nicht geladen werden"
-        ok "Modell geladen: $OLLAMA_MODEL"
+        ok "Dual-Model aktiv:"
+        info "  Coder: $OLLAMA_MODEL (Code, /shell, Erklaerungen)"
+        info "  Chat:  $OLLAMA_MODEL_FAST (Nachrichten, Deutsch)"
+    else
+        info "Single-Model: $OLLAMA_MODEL fuer alles"
     fi
 }
 
@@ -453,15 +514,23 @@ step_python() {
     run_with_spinner "Telegram-Bot Paket installieren"         "$INSTALL_DIR/venv/bin/pip" install "python-telegram-bot==21.0" requests python-dotenv ||         fail "Basis-Pakete fehlgeschlagen"
     ok "Telegram + Basis-Pakete installiert"
 
-    run_with_spinner "setuptools + wheel aktualisieren"         bash -c '"$INSTALL_DIR/venv/bin/pip" install --upgrade setuptools wheel pip >> "$LOG_FILE" 2>&1'
+    # Aider bekommt ein eigenes venv – seine Dependencies kollidieren mit dem Bot
+    info "Installiere aider-chat in separatem venv (2-5 Min)..."
+    AIDER_VENV="$INSTALL_DIR/aider-venv"
 
-    info "Installiere aider-chat (Coding-Agent, 2-5 Min)..."
-    if "$INSTALL_DIR/venv/bin/pip" install aider-chat >> "$LOG_FILE" 2>&1; then
-        ok "aider-chat installiert"
-    elif "$INSTALL_DIR/venv/bin/pip" install --no-build-isolation aider-chat >> "$LOG_FILE" 2>&1; then
-        ok "aider-chat installiert"
+    if python3 -m venv "$AIDER_VENV" >> "$LOG_FILE" 2>&1; then
+        "$AIDER_VENV/bin/pip" install --upgrade pip setuptools wheel >> "$LOG_FILE" 2>&1
+        if "$AIDER_VENV/bin/pip" install aider-chat >> "$LOG_FILE" 2>&1; then
+            ok "aider-chat installiert ($AIDER_VENV)"
+        elif "$AIDER_VENV/bin/pip" install --no-build-isolation aider-chat >> "$LOG_FILE" 2>&1; then
+            ok "aider-chat installiert (no-build-isolation)"
+        else
+            warn "aider-chat fehlgeschlagen – spaeter manuell:"
+            info "  $AIDER_VENV/bin/pip install aider-chat"
+            info "Der Bot funktioniert ohne Aider – /code ist dann nicht verfuegbar."
+        fi
     else
-        warn "aider-chat fehlgeschlagen – spaeter: $INSTALL_DIR/venv/bin/pip install --no-build-isolation aider-chat"
+        warn "Aider venv konnte nicht erstellt werden"
     fi
 }
 
@@ -522,6 +591,7 @@ TELEGRAM_BOT_TOKEN=$BOT_TOKEN
 TELEGRAM_CHAT_ID=$CHAT_ID
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=$OLLAMA_MODEL
+OLLAMA_MODEL_FAST=$OLLAMA_MODEL_FAST
 SNAPSHOT_DIR=$SNAPSHOT_DIR
 SNAPSHOT_METHOD=$SNAPSHOT_METHOD
 INSTALL_DIR=$INSTALL_DIR
@@ -529,7 +599,7 @@ MGMT_USER=$MGMT_USER
 AIDER_WORKDIR=$WORKSPACE_DIR
 ENVEOF
 
-    chmod 644 "$INSTALL_DIR/config/.env"
+    chmod 600 "$INSTALL_DIR/config/.env"
     ok "Konfiguration gespeichert"
 }
 
@@ -548,9 +618,10 @@ step_service() {
 
     cat > /etc/systemd/system/clownfisch.service << SERVICEEOF
 [Unit]
-Description=Clownfischserver Telegram Bot
-After=network.target ollama.service
-Wants=ollama.service
+Description=🐠 Clownfischserver Telegram Bot
+Documentation=https://github.com/mehlzoerwer-claude/clownfischserver
+After=network-online.target ollama.service
+Wants=network-online.target ollama.service
 
 [Service]
 Type=simple
@@ -562,9 +633,11 @@ Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-# Allow sudo and system commands
+SyslogIdentifier=clownfisch
+# Allow sudo and iptables for SSH management
 AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
 SecureBits=keep-caps
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
@@ -580,6 +653,31 @@ SERVICEEOF
     else
         warn "Bot gestartet – check Logs: journalctl -u clownfisch -n 20 --no-pager"
     fi
+
+    # Boot-Notification Service
+    cat > /etc/systemd/system/clownfisch-boot.service << BOOTEOF
+[Unit]
+Description=🐠 Clownfischserver Boot Notification
+Documentation=https://github.com/mehlzoerwer-claude/clownfischserver
+After=network-online.target clownfisch.service ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 120
+ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/bot/boot_notify.py
+EnvironmentFile=$INSTALL_DIR/config/.env
+WorkingDirectory=$INSTALL_DIR
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=clownfisch-boot
+
+[Install]
+WantedBy=multi-user.target
+BOOTEOF
+
+    run_with_spinner "Boot-Notification aktivieren" bash -c "systemctl daemon-reload && systemctl enable clownfisch-boot"
+    ok "Boot-Notification: Telegram-Meldung 2 Min nach Serverstart"
 }
 
 # ZUSAMMENFASSUNG
@@ -589,7 +687,7 @@ print_summary() {
     echo ""
     echo -e "${GREEN}${BOLD}"
     echo "  +======================================================+"
-    echo "  |        CLOWNFISCHSERVER BEREIT!  v0.4.1              |"
+    echo "  |        CLOWNFISCHSERVER BEREIT!  v0.4.11              |"
     echo "  +======================================================+"
     echo -e "${NC}"
     echo -e "  ${BOLD}Server:${NC}      $SERVER_IP"
@@ -628,10 +726,14 @@ ${BOLD}${CYAN}🐠 Clownfischserver Update-Modus${NC}
     chown -R "$MGMT_USER:$MGMT_USER" "$INSTALL_DIR/bot"
     ok "Bot-Dateien aktualisiert"
 
-    # Update systemd service if changed
+    # Update systemd services if changed
     cp "$SCRIPT_DIR/systemd/clownfisch.service" /etc/systemd/system/clownfisch.service
+    if [ -f "$SCRIPT_DIR/systemd/clownfisch-boot.service" ]; then
+        cp "$SCRIPT_DIR/systemd/clownfisch-boot.service" /etc/systemd/system/clownfisch-boot.service
+        systemctl enable clownfisch-boot >> "$LOG_FILE" 2>&1
+    fi
     systemctl daemon-reload >> "$LOG_FILE" 2>&1
-    ok "Systemd Service aktualisiert"
+    ok "Systemd Services aktualisiert"
 
     # Restart
     systemctl restart clownfisch >> "$LOG_FILE" 2>&1
@@ -668,7 +770,7 @@ main() {
         esac
     fi
 
-    log "=== Clownfischserver v0.4.1 Installation gestartet ==="
+    log "=== Clownfischserver v0.4.11 Installation gestartet ==="
     step_checks
     step_packages
     step_user

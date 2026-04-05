@@ -9,8 +9,7 @@ Repo:    https://github.com/mehlzoerwer-claude/clownfischserver
 import asyncio
 import logging
 import os
-import subprocess
-from typing import Optional
+import shlex
 
 logger = logging.getLogger(__name__)
 
@@ -18,68 +17,12 @@ MGMT_USER = os.getenv("MGMT_USER", "clownfish")
 COMMAND_TIMEOUT = 120  # seconds
 
 
-async def execute_command(
-    user_message: str,
-    ollama_client,
-    skip_safety: bool = False
-) -> str:
-    """
-    Execute a shell command derived from user's natural language input.
-    Returns combined stdout + stderr + optional explanation.
-    """
-
-    if skip_safety:
-        # For internal status calls, build command directly
-        shell_cmd = _build_status_command(user_message)
-    else:
-        # Get the shell command from the safety check result
-        safety = await ollama_client.safety_check(user_message)
-
-        if safety.get("type") in ("info", "chat"):
-            # Question or conversation
-            return await ollama_client.chat(user_message)
-
-        shell_cmd = safety.get("shell_command", "").strip()
-        if not shell_cmd:
-            return await ollama_client.chat(user_message)
-
-    logger.info(f"Executing: {shell_cmd}")
-
-    stdout, stderr, returncode = await _run_shell(shell_cmd)
-
-    # Build response
-    response_parts = []
-
-    if shell_cmd:
-        response_parts.append(f"$ {shell_cmd}")
-
-    if stdout:
-        response_parts.append(stdout)
-
-    if stderr and returncode != 0:
-        response_parts.append(f"[STDERR]\n{stderr}")
-
-    if returncode != 0:
-        response_parts.append(f"[Exit code: {returncode}]")
-
-    raw_output = "\n".join(response_parts)
-
-    # If there's an error or output is complex, ask Ollama to explain
-    if returncode != 0 or (len(stdout) > 500 and not skip_safety):
-        explanation = await ollama_client.explain_output(shell_cmd, stdout, stderr)
-        if explanation:
-            raw_output += f"\n\n💡 {explanation}"
-
-    return raw_output or "✓ Ausgeführt (keine Ausgabe)"
-
-
-async def _run_shell(command: str) -> tuple[str, str, int]:
+async def run_shell(command: str) -> tuple[str, str, int]:
     """Run a shell command as mgmt user, return (stdout, stderr, returncode)"""
     try:
-        # Run as mgmt user via sudo -u, or directly if already that user
         current_user = os.getenv("USER", "")
         if current_user != MGMT_USER:
-            full_cmd = f"sudo -u {MGMT_USER} bash -c {repr(command)}"
+            full_cmd = f"sudo -u {MGMT_USER} bash -c {shlex.quote(command)}"
         else:
             full_cmd = command
 
@@ -110,25 +53,33 @@ async def _run_shell(command: str) -> tuple[str, str, int]:
         return "", str(e), 1
 
 
-def _build_status_command(message: str) -> str:
-    """Build a status command for internal use"""
-    message_lower = message.lower()
+async def execute_command(shell_cmd: str, ollama_client) -> str:
+    """
+    Execute a pre-determined shell command and return formatted output.
+    Optionally asks Ollama to explain errors or complex output.
+    """
+    logger.info(f"Executing: {shell_cmd}")
 
-    if "memory" in message_lower or "ram" in message_lower:
-        return "free -h"
-    elif "disk" in message_lower or "storage" in message_lower:
-        return "df -h"
-    elif "cpu" in message_lower or "load" in message_lower:
-        return "top -bn1 | head -20"
-    elif "uptime" in message_lower:
-        return "uptime"
-    elif "process" in message_lower or "running" in message_lower:
-        return "ps aux --sort=-%cpu | head -20"
-    else:
-        # Full status
-        return (
-            "echo '=== UPTIME ===' && uptime && "
-            "echo '=== MEMORY ===' && free -h && "
-            "echo '=== DISK ===' && df -h && "
-            "echo '=== TOP PROCESSES ===' && ps aux --sort=-%cpu | head -10"
-        )
+    stdout, stderr, returncode = await run_shell(shell_cmd)
+
+    # Build response
+    response_parts = [f"$ {shell_cmd}"]
+
+    if stdout:
+        response_parts.append(stdout)
+
+    if stderr and returncode != 0:
+        response_parts.append(f"[STDERR]\n{stderr}")
+
+    if returncode != 0:
+        response_parts.append(f"[Exit code: {returncode}]")
+
+    raw_output = "\n".join(response_parts)
+
+    # If there's an error or output is complex, ask Ollama to explain
+    if returncode != 0 or len(stdout) > 500:
+        explanation = await ollama_client.explain_output(shell_cmd, stdout, stderr)
+        if explanation:
+            raw_output += f"\n\n💡 {explanation}"
+
+    return raw_output or "✓ Ausgeführt (keine Ausgabe)"

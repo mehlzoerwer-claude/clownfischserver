@@ -18,15 +18,15 @@ INSTALL_DIR = os.getenv("INSTALL_DIR", "/opt/clownfischserver")
 AIDER_WORKDIR = os.getenv("AIDER_WORKDIR", "/opt/clownfisch-workspace")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:2b")
-TIMEOUT = 300  # 5 minutes for aider tasks
+TIMEOUT = 600  # 10 minutes for aider tasks on CPU
 
 
 class AiderWrapper:
     def __init__(self):
         self.workdir = Path(AIDER_WORKDIR)
         self.workdir.mkdir(parents=True, exist_ok=True)
-        self.venv_python = Path(INSTALL_DIR) / "venv" / "bin" / "python3"
-        self.venv_aider = Path(INSTALL_DIR) / "venv" / "bin" / "aider"
+        self.venv_python = Path(INSTALL_DIR) / "aider-venv" / "bin" / "python3"
+        self.venv_aider = Path(INSTALL_DIR) / "aider-venv" / "bin" / "aider"
         logger.info(f"AiderWrapper init: workdir={self.workdir}")
 
     async def run(self, task: str, target_file: str = None) -> str:
@@ -98,10 +98,12 @@ class AiderWrapper:
         cmd = [
             str(self.venv_aider),
             "--model", f"ollama/{OLLAMA_MODEL}",
-            "--ollama-api-base", OLLAMA_BASE_URL,
             "--no-git",           # Don't require git
             "--yes",              # Auto-confirm all changes
             "--no-pretty",        # Plain output for telegram
+            "--no-show-model-warnings",  # Skip env var warnings
+            "--no-analytics",     # No analytics prompts
+            "--edit-format", "diff",  # Better format for small models
             "--message", task,    # The task as a message
         ]
 

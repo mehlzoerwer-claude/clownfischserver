@@ -9,7 +9,9 @@ Repo:    https://github.com/mehlzoerwer-claude/clownfischserver
 import logging
 import os
 import subprocess
-import tarfile
+import shutil
+import json
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -18,7 +20,46 @@ logger = logging.getLogger(__name__)
 
 SNAPSHOT_DIR = os.getenv("SNAPSHOT_DIR", "/opt/clownfisch-snapshots")
 SNAPSHOT_METHOD = os.getenv("SNAPSHOT_METHOD", "tar")
-MAX_SNAPSHOTS = 50  # Auto-cleanup after this many
+MAX_SNAPSHOTS = 20  # Auto-cleanup limit (kept snapshots are exempt)
+KEPT_FILE = os.path.join(SNAPSHOT_DIR, ".kept.json")  # Tracks important snapshots
+
+# Commands that trigger automatic snapshots
+AUTO_SNAPSHOT_TRIGGERS = [
+    "apt install", "apt-get install", "apt remove", "apt-get remove",
+    "apt upgrade", "apt-get upgrade", "dnf install", "dnf remove",
+    "pacman -S", "pacman -R",
+    "systemctl enable", "systemctl disable",
+    "rm -", "mv ", "cp -",
+    "chmod ", "chown ",
+    "nano ", "vim ", "vi ", "echo >", "tee ",
+    "dd ", "mkfs", "fdisk",
+]
+
+# Commands that are always read-only – never need a snapshot
+READONLY_PREFIXES = [
+    "ls", "cat ", "grep ", "find ", "df ", "du ", "free",
+    "top", "ps ", "who", "uptime", "journalctl", "tail ",
+    "head ", "wc ", "stat ", "file ", "which ", "type ",
+    "systemctl status", "systemctl is-active", "systemctl show",
+    "ollama list", "docker ps", "docker images",
+]
+
+
+def should_snapshot(command: str) -> bool:
+    """Check if a shell command warrants an automatic snapshot."""
+    cmd_lower = command.lower().strip()
+
+    # Skip read-only commands
+    for ro in READONLY_PREFIXES:
+        if cmd_lower.startswith(ro):
+            return False
+
+    # Check triggers
+    for trigger in AUTO_SNAPSHOT_TRIGGERS:
+        if trigger in cmd_lower:
+            return True
+
+    return False
 
 
 class SnapshotManager:
@@ -26,10 +67,30 @@ class SnapshotManager:
         self.snapshot_dir = Path(SNAPSHOT_DIR)
         self.method = SNAPSHOT_METHOD
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        self._load_kept()
         logger.info(f"SnapshotManager init: method={self.method}, dir={self.snapshot_dir}")
 
     def _timestamp(self) -> str:
         return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    def _load_kept(self):
+        """Load list of kept (important) snapshots."""
+        try:
+            if os.path.exists(KEPT_FILE):
+                with open(KEPT_FILE, "r") as f:
+                    self.kept = set(json.loads(f.read()))
+            else:
+                self.kept = set()
+        except Exception:
+            self.kept = set()
+
+    def _save_kept(self):
+        """Save kept snapshots list."""
+        try:
+            with open(KEPT_FILE, "w") as f:
+                json.dump(list(self.kept), f)
+        except Exception as e:
+            logger.error(f"Could not save kept list: {e}")
 
     def create_snapshot(self, label: str = "") -> Optional[str]:
         """Create a snapshot. Returns snapshot name or None on failure."""
@@ -38,179 +99,154 @@ class SnapshotManager:
             name += f"_{label}"
 
         try:
-            if self.method == "btrfs":
-                result = self._create_btrfs_snapshot(name)
-            else:
-                result = self._create_tar_snapshot(name)
-
+            result = self._create_tar_snapshot(name)
             if result:
                 logger.info(f"Snapshot created: {name}")
                 self._cleanup_old_snapshots()
                 return name
             return None
-
         except Exception as e:
             logger.error(f"Snapshot creation failed: {e}")
             return None
 
-    def _create_btrfs_snapshot(self, name: str) -> bool:
-        """Create a btrfs snapshot of root subvolume"""
-        snap_path = self.snapshot_dir / name
-        try:
-            subprocess.run(
-                ["btrfs", "subvolume", "snapshot", "/", str(snap_path)],
-                check=True,
-                capture_output=True
-            )
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"btrfs snapshot failed: {e.stderr.decode()}")
-            return False
-
     def _create_tar_snapshot(self, name: str) -> bool:
-        """Create tar.gz snapshot of important directories"""
+        """Create tar.gz snapshot, excluding sensitive files."""
         snap_path = self.snapshot_dir / f"{name}.tar.gz"
 
-        # Directories to snapshot (important config/app dirs, not entire system)
         dirs_to_backup = [
             "/etc",
             "/opt/clownfischserver",
             "/home",
-            "/var/spool/cron",
         ]
-
-        # Filter to existing dirs
         existing = [d for d in dirs_to_backup if os.path.exists(d)]
 
-        try:
-            with tarfile.open(str(snap_path), "w:gz") as tar:
-                for d in existing:
-                    tar.add(d, arcname=d.lstrip("/"), recursive=True)
-            logger.info(f"tar.gz snapshot: {snap_path} ({snap_path.stat().st_size // 1024}KB)")
-            return True
-        except Exception as e:
-            logger.error(f"tar snapshot failed: {e}")
-            if snap_path.exists():
-                snap_path.unlink()
-            return False
+        if not existing:
+            raise Exception("Keine Verzeichnisse zum Sichern gefunden")
 
-    def list_snapshots(self) -> list[str]:
-        """List all available snapshots, newest first"""
-        try:
-            if self.method == "btrfs":
-                snaps = [
-                    d.name for d in self.snapshot_dir.iterdir()
-                    if d.is_dir()
-                ]
-            else:
-                snaps = [
-                    f.stem for f in self.snapshot_dir.iterdir()
-                    if f.suffix == ".gz" and f.name.endswith(".tar.gz")
-                ]
-                # Fix: handle double extension
-                snaps = [
-                    f.name.replace(".tar.gz", "")
-                    for f in self.snapshot_dir.iterdir()
-                    if f.name.endswith(".tar.gz")
-                ]
+        cmd = ["tar", "czf", str(snap_path)]
+        cmd += ["--ignore-failed-read"]
+        # Exclude sensitive files
+        cmd += ["--exclude=/etc/ssh/ssh_host_rsa_key"]
+        cmd += ["--exclude=/etc/ssh/ssh_host_ecdsa_key"]
+        cmd += ["--exclude=/etc/ssh/ssh_host_ed25519_key"]
+        cmd += ["--exclude=/etc/shadow"]
+        cmd += ["--exclude=/etc/gshadow"]
+        # Exclude large caches
+        cmd += ["--exclude=__pycache__"]
+        cmd += ["--exclude=*.pyc"]
+        cmd += ["--exclude=node_modules"]
+        cmd += existing
 
-            snaps.sort(reverse=True)
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode not in (0, 1):  # 1 = warnings only
+            raise Exception(result.stderr.decode())
+        return True
+
+    def list_snapshots(self) -> list[dict]:
+        """List all snapshots with metadata, newest first."""
+        try:
+            snaps = []
+            for f in self.snapshot_dir.iterdir():
+                if f.name.endswith(".tar.gz"):
+                    name = f.name.replace(".tar.gz", "")
+                    size_mb = f.stat().st_size // (1024 * 1024)
+                    kept = name in self.kept
+                    snaps.append({
+                        "name": name,
+                        "size_mb": size_mb,
+                        "kept": kept
+                    })
+            snaps.sort(key=lambda x: x["name"], reverse=True)
             return snaps
         except Exception as e:
             logger.error(f"list_snapshots failed: {e}")
             return []
 
-    def rollback(self, snapshot_name: str) -> str:
-        """Roll back to a specific snapshot"""
-        try:
-            if self.method == "btrfs":
-                return self._rollback_btrfs(snapshot_name)
-            else:
-                return self._rollback_tar(snapshot_name)
-        except Exception as e:
-            logger.error(f"Rollback failed: {e}")
-            return f"❌ Rollback fehlgeschlagen: {e}"
-
-    def _rollback_btrfs(self, name: str) -> str:
-        snap_path = self.snapshot_dir / name
-        if not snap_path.exists():
+    def keep_snapshot(self, name: str) -> str:
+        """Mark a snapshot as important (won't be auto-deleted)."""
+        snaps = [s["name"] for s in self.list_snapshots()]
+        if name not in snaps:
             return f"❌ Snapshot '{name}' nicht gefunden."
+        self.kept.add(name)
+        self._save_kept()
+        return f"⭐ Snapshot '{name}' als wichtig markiert – wird nicht automatisch gelöscht."
 
-        try:
-            # For btrfs rollback we'd need to swap subvolumes
-            # This is a simplified version - production needs more care
-            subprocess.run(
-                ["btrfs", "subvolume", "snapshot", str(snap_path), f"/rollback_{name}"],
-                check=True, capture_output=True
-            )
-            return (
-                f"✅ btrfs Snapshot '{name}' bereit.\n"
-                f"⚠️ Für vollständigen Rollback: Server neu booten und in fstab auf neues Subvolume zeigen.\n"
-                f"Snapshot unter: /rollback_{name}"
-            )
-        except subprocess.CalledProcessError as e:
-            return f"❌ btrfs Rollback Fehler: {e.stderr.decode()}"
+    def unkeep_snapshot(self, name: str) -> str:
+        """Remove important mark from snapshot."""
+        self.kept.discard(name)
+        self._save_kept()
+        return f"✅ Markierung von '{name}' entfernt."
 
-    def _rollback_tar(self, name: str) -> str:
+    def delete_snapshot(self, name: str) -> str:
+        """Delete a specific snapshot."""
         snap_path = self.snapshot_dir / f"{name}.tar.gz"
         if not snap_path.exists():
             return f"❌ Snapshot '{name}' nicht gefunden."
-
         try:
-            # Extract to temp location first for safety
-            temp_dir = f"/tmp/rollback_{name}"
-            os.makedirs(temp_dir, exist_ok=True)
+            snap_path.unlink()
+            self.kept.discard(name)
+            self._save_kept()
+            return f"🗑️ Snapshot '{name}' gelöscht."
+        except Exception as e:
+            return f"❌ Fehler beim Löschen: {e}"
 
-            with tarfile.open(str(snap_path), "r:gz") as tar:
-                # Only restore /etc and /opt (safer than full restore)
-                members = [m for m in tar.getmembers()
-                          if m.name.startswith(("etc/", "opt/clownfischserver"))]
-                tar.extractall(path=temp_dir, members=members)
+    def rollback(self, snapshot_name: str) -> str:
+        """Roll back to a specific snapshot."""
+        snap_path = self.snapshot_dir / f"{snapshot_name}.tar.gz"
+        if not snap_path.exists():
+            return f"❌ Snapshot '{snapshot_name}' nicht gefunden."
+        try:
+            tmp_dir = tempfile.mkdtemp()
 
-            # Restore /etc
-            etc_backup = os.path.join(temp_dir, "etc")
+            # Extract all content
+            result = subprocess.run(
+                ["tar", "xzf", str(snap_path), "-C", tmp_dir],
+                capture_output=True
+            )
+            if result.returncode not in (0, 1):
+                raise Exception(f"tar extract failed: {result.stderr.decode()}")
+
+            restored = []
+
+            etc_backup = os.path.join(tmp_dir, "etc")
             if os.path.exists(etc_backup):
-                subprocess.run(
-                    ["rsync", "-av", "--delete", etc_backup + "/", "/etc/"],
-                    capture_output=True
-                )
+                subprocess.run(["rsync", "-av", "--delete",
+                    etc_backup + "/", "/etc/"], capture_output=True)
+                restored.append("/etc")
 
-            # Restore clownfischserver
-            cfs_backup = os.path.join(temp_dir, "opt/clownfischserver")
+            cfs_backup = os.path.join(tmp_dir, "opt/clownfischserver")
             if os.path.exists(cfs_backup):
-                subprocess.run(
-                    ["rsync", "-av", "--delete", cfs_backup + "/", "/opt/clownfischserver/"],
-                    capture_output=True
-                )
+                subprocess.run(["rsync", "-av", "--delete",
+                    cfs_backup + "/", "/opt/clownfischserver/"], capture_output=True)
+                restored.append("/opt/clownfischserver")
 
-            # Cleanup temp
-            subprocess.run(["rm", "-rf", temp_dir], capture_output=True)
+            home_backup = os.path.join(tmp_dir, "home")
+            if os.path.exists(home_backup):
+                subprocess.run(["rsync", "-av", "--delete",
+                    home_backup + "/", "/home/"], capture_output=True)
+                restored.append("/home")
 
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            restored_str = ", ".join(restored) if restored else "nichts"
             return (
-                f"✅ Rollback zu '{name}' abgeschlossen.\n"
-                f"/etc und /opt/clownfischserver wiederhergestellt.\n"
-                f"Dienste neu starten mit: systemctl restart clownfisch ollama"
+                f"✅ Rollback zu '{snapshot_name}' abgeschlossen.\n"
+                f"Wiederhergestellt: {restored_str}\n"
+                f"Dienste neu starten: systemctl restart clownfisch ollama"
             )
         except Exception as e:
             return f"❌ Rollback Fehler: {e}"
 
     def _cleanup_old_snapshots(self):
-        """Remove oldest snapshots if over MAX_SNAPSHOTS"""
+        """Remove oldest snapshots if over MAX_SNAPSHOTS, skip kept ones."""
         snaps = self.list_snapshots()
-        if len(snaps) > MAX_SNAPSHOTS:
-            to_delete = snaps[MAX_SNAPSHOTS:]
+        deletable = [s for s in snaps if not s["kept"]]
+        if len(deletable) > MAX_SNAPSHOTS:
+            to_delete = deletable[MAX_SNAPSHOTS:]
             for snap in to_delete:
+                snap_path = self.snapshot_dir / f"{snap['name']}.tar.gz"
                 try:
-                    if self.method == "btrfs":
-                        snap_path = self.snapshot_dir / snap
-                        subprocess.run(
-                            ["btrfs", "subvolume", "delete", str(snap_path)],
-                            capture_output=True
-                        )
-                    else:
-                        snap_path = self.snapshot_dir / f"{snap}.tar.gz"
-                        if snap_path.exists():
-                            snap_path.unlink()
-                    logger.info(f"Cleaned up old snapshot: {snap}")
+                    snap_path.unlink()
+                    logger.info(f"Auto-cleanup: {snap['name']}")
                 except Exception as e:
-                    logger.warning(f"Could not delete snapshot {snap}: {e}")
+                    logger.warning(f"Could not delete {snap['name']}: {e}")

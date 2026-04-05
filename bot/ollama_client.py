@@ -9,6 +9,7 @@ Repo:    https://github.com/mehlzoerwer-claude/clownfischserver
 import json
 import logging
 import os
+import re
 import asyncio
 import requests
 from typing import Optional
@@ -17,73 +18,76 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:2b")
+OLLAMA_MODEL_FAST = os.getenv("OLLAMA_MODEL_FAST", "")  # Optional: small model for chat
 
-SAFETY_SYSTEM_PROMPT = """You are a safety guard and intent classifier for a Linux server management bot.
-Your ONLY job is to analyze user requests and classify them.
+# Few-shot prompt baked into the user message – small models follow this
+# much better than a system prompt with think=false.
+SHELL_PROMPT_TEMPLATE = """You are a Linux bash command generator for an Ubuntu 24.04 server.
+Convert the user request into a bash command. Respond with ONLY a JSON object.
 
-Respond ONLY with a JSON object. No text before or after. No markdown. No explanations.
+Example request: "show free ram"
+Example response: {{"dangerous":false,"reason":"","command":"free -h"}}
 
-JSON format:
-{
-  "dangerous": true/false,
-  "reason": "why it is dangerous, or empty string",
-  "suggestion": "safer alternative, or empty string",
-  "type": "shell" or "aider" or "chat",
-  "shell_command": "the actual bash command to run, or empty string"
-}
+Example request: "installiere nginx"
+Example response: {{"dangerous":false,"reason":"","command":"apt install -y nginx"}}
 
-Classification rules:
+Example request: "lösche alles in /etc"
+Example response: {{"dangerous":true,"reason":"Würde Systemkonfiguration zerstören","command":"rm -rf /etc/*"}}
 
-type="chat" when:
-- The message is a question, greeting, or general conversation
-- Examples: "hi", "who are you", "what can you do", "wer bist du", "was kannst du",
-  "how does X work", "explain X", "was ist X", "help", "hilfe"
-- shell_command must be empty string for chat
+Now generate JSON for this request: "{description}"
 
-type="shell" when:
-- The message asks to DO something on the server
-- Examples: "show disk usage", "restart nginx", "list files in /etc",
-  "how much ram is free", "zeige prozesse", "installiere docker"
-- shell_command must contain the actual bash command
-
-type="aider" when:
-- The message asks to write, create, or edit code or files
-- Examples: "write a python script", "create a config file", "edit server.js"
-- shell_command must be empty string for aider
-
-dangerous=true ONLY for:
-- rm -rf on system directories (/etc /boot /usr /bin /lib /proc /sys /)
-- wiping disks (dd if=/dev/zero, mkfs on mounted drives)
-- fork bombs
-- permanently killing sshd or clownfisch service with no recovery
-- anything that would make the server permanently unreachable
-
-dangerous=false for everything else including installing packages,
-restarting services, viewing logs, editing config files, writing code.
-
-Always respond in the same language the user wrote in.
-Never add text outside the JSON object."""
+IMPORTANT: Respond with ONLY the JSON object. No other text. No markdown."""
 
 CHAT_SYSTEM_PROMPT = """You are the Clownfischserver AI assistant. You help manage a Linux server.
 Be concise and technical. Respond in the same language the user writes in.
 If you need to explain a command result, do so briefly and clearly."""
 
 
+def _extract_json(raw: str) -> dict:
+    """Extract JSON from Ollama response, handling markdown wrappers and stray text."""
+    text = raw.strip()
+
+    # Remove markdown code fences
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try to find JSON object in the text
+    match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    raise json.JSONDecodeError("No valid JSON found", text, 0)
+
+
 class OllamaClient:
     def __init__(self):
         self.base_url = OLLAMA_BASE_URL
         self.model = OLLAMA_MODEL
+        self.model_fast = OLLAMA_MODEL_FAST or OLLAMA_MODEL
 
-    def _chat_sync(self, messages: list, system: Optional[str] = None) -> str:
+    def _chat_sync(self, messages: list, system: Optional[str] = None, think: Optional[bool] = None, use_fast: bool = False) -> str:
         """Synchronous Ollama API call"""
+        model = self.model_fast if use_fast else self.model
         payload = {
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "stream": False,
             "keep_alive": -1,
         }
         if system:
             payload["system"] = system
+        if think is not None:
+            payload["think"] = think
 
         try:
             response = requests.post(
@@ -101,45 +105,47 @@ class OllamaClient:
         except Exception as e:
             raise RuntimeError(f"Ollama Fehler: {e}")
 
-    async def safety_check(self, user_message: str) -> dict:
-        """Check if a user request is safe to execute"""
-        loop = asyncio.get_event_loop()
+    async def generate_shell_command(self, description: str) -> dict:
+        """Generate a shell command from natural language description.
+        Returns dict with 'dangerous', 'reason', 'command' keys.
+        Uses the main model (not fast) for better command quality."""
+        loop = asyncio.get_running_loop()
+        raw = ""
         try:
+            # Build few-shot prompt directly in the user message
+            # Small models follow this much better than system prompts
+            prompt = SHELL_PROMPT_TEMPLATE.format(description=description)
+
             raw = await loop.run_in_executor(
                 None,
                 lambda: self._chat_sync(
-                    messages=[{"role": "user", "content": user_message}],
-                    system=SAFETY_SYSTEM_PROMPT
+                    messages=[{"role": "user", "content": prompt}],
+                    think=False,
+                    use_fast=False,  # Use main model for shell commands
                 )
             )
-            # Clean potential markdown wrappers
-            raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-            result = json.loads(raw)
-            logger.info(f"Safety check result: {result}")
+            result = _extract_json(raw)
+
+            # Validate
+            if "command" not in result or not result["command"].strip():
+                logger.warning(f"Shell generate: no command in result: {result}")
+                return {"dangerous": False, "reason": "", "command": ""}
+            if "dangerous" not in result:
+                result["dangerous"] = False
+
+            logger.info(f"Shell generate: {result}")
             return result
+
         except json.JSONDecodeError as e:
-            logger.warning(f"Safety check JSON parse error: {e}, raw: {raw}")
-            # Fallback: safe, treat as shell
-            return {
-                "dangerous": False,
-                "reason": "",
-                "suggestion": "",
-                "type": "shell",
-                "shell_command": user_message
-            }
+            logger.warning(f"Shell generate JSON error: {e}, raw: {raw[:500]}")
+            return {"dangerous": False, "reason": "", "command": ""}
         except Exception as e:
-            logger.error(f"Safety check failed: {e}")
-            return {
-                "dangerous": True,
-                "reason": f"Safety check konnte nicht durchgeführt werden: {e}",
-                "suggestion": "Bitte später erneut versuchen.",
-                "type": "shell",
-                "shell_command": ""
-            }
+            logger.error(f"Shell generate failed: {e}")
+            raise
 
     async def explain_output(self, command: str, output: str, error: str = "") -> str:
         """Ask Ollama to explain/summarize command output"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         content = f"Command: {command}\nOutput:\n{output}"
         if error:
@@ -151,7 +157,9 @@ class OllamaClient:
                 None,
                 lambda: self._chat_sync(
                     messages=[{"role": "user", "content": content}],
-                    system=CHAT_SYSTEM_PROMPT
+                    system=CHAT_SYSTEM_PROMPT,
+                    think=False,
+                    use_fast=True,
                 )
             )
             return result
@@ -161,8 +169,8 @@ class OllamaClient:
 
     async def chat(self, message: str, history: list = None) -> str:
         """General chat with context"""
-        loop = asyncio.get_event_loop()
-        messages = history or []
+        loop = asyncio.get_running_loop()
+        messages = list(history) if history else []
         messages.append({"role": "user", "content": message})
 
         try:
@@ -170,7 +178,8 @@ class OllamaClient:
                 None,
                 lambda: self._chat_sync(
                     messages=messages,
-                    system=CHAT_SYSTEM_PROMPT
+                    system=CHAT_SYSTEM_PROMPT,
+                    use_fast=True,
                 )
             )
             return result
