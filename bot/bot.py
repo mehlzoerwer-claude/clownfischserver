@@ -472,6 +472,27 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             capture_output=True
         )
 
+        # Step 4b: Copy systemd service files if present
+        systemd_dir = None
+        for root, dirs, files in os.walk(extract_dir):
+            if any(f.endswith(".service") for f in files):
+                systemd_dir = root
+                break
+
+        if systemd_dir:
+            for f in os.listdir(systemd_dir):
+                if f.endswith(".service"):
+                    src = os.path.join(systemd_dir, f)
+                    dst = f"/etc/systemd/system/{f}"
+                    subprocess.run(["sudo", "cp", src, dst], capture_output=True)
+                    logger.info(f"Service updated: {f}")
+            subprocess.run(["sudo", "systemctl", "daemon-reload"], capture_output=True)
+            # Enable boot notification if present
+            subprocess.run(
+                ["sudo", "systemctl", "enable", "clownfisch-boot"],
+                capture_output=True
+            )
+
         # Cleanup
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

@@ -23,13 +23,29 @@ OLLAMA_MODEL_FAST = os.getenv("OLLAMA_MODEL_FAST", "")  # Optional: small model 
 # Few-shot prompt baked into the user message – small models follow this
 # much better than a system prompt with think=false.
 SHELL_PROMPT_TEMPLATE = """You are a Linux bash command generator for an Ubuntu 24.04 server.
-Convert the user request into a bash command. Respond with ONLY a JSON object.
+Convert the user request into a single non-interactive bash command.
+Respond with ONLY a JSON object.
+
+CRITICAL RULES:
+- Commands run WITHOUT a terminal. No interactive commands like nano, vim, crontab -e, less, top.
+- Use non-interactive alternatives: echo/tee for files, /etc/cron.d/ for cron jobs, sed for edits.
+- Use sudo when root permissions are needed.
+- Chain commands with && if needed.
 
 Example request: "show free ram"
 Example response: {{"dangerous":false,"reason":"","command":"free -h"}}
 
 Example request: "installiere nginx"
-Example response: {{"dangerous":false,"reason":"","command":"apt install -y nginx"}}
+Example response: {{"dangerous":false,"reason":"","command":"sudo apt install -y nginx"}}
+
+Example request: "erstelle einen cronjob der alle 5 minuten ein script ausfuehrt"
+Example response: {{"dangerous":false,"reason":"","command":"echo '*/5 * * * * root /path/to/script.sh' | sudo tee /etc/cron.d/myjob"}}
+
+Example request: "schreibe hello world in eine datei"
+Example response: {{"dangerous":false,"reason":"","command":"echo 'hello world' | sudo tee /tmp/hello.txt"}}
+
+Example request: "starte nginx neu"
+Example response: {{"dangerous":false,"reason":"","command":"sudo systemctl restart nginx"}}
 
 Example request: "lösche alles in /etc"
 Example response: {{"dangerous":true,"reason":"Würde Systemkonfiguration zerstören","command":"rm -rf /etc/*"}}
