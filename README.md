@@ -56,8 +56,8 @@ Das Ziel: **Server-Administration so einfach wie eine Chat-Nachricht.** Heute ei
 
 ```bash
 # Frisches Ubuntu/Debian – als root:
-wget https://github.com/mehlzoerwer-claude/clownfischserver/releases/latest/download/clownfischserver.zip
-unzip clownfischserver.zip && cd clownfischserver
+wget https://github.com/mehlzoerwer-claude/clownfischserver/archive/refs/heads/main.zip
+unzip main.zip && cd clownfischserver-main
 bash install.sh
 ```
 
