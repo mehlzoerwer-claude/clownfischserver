@@ -168,7 +168,7 @@ step_packages() {
     case "$PKG_MANAGER" in
         apt)
             run_with_spinner "Paketliste aktualisieren" apt-get update -qq || fail "apt update fehlgeschlagen"
-            run_with_spinner "Pakete installieren" apt-get install -y -qq                 curl wget git ufw python3 python3-pip python3-venv                 sudo htop net-tools lsof rsync openssl knockd ||                 warn "Einige Pakete konnten nicht installiert werden – siehe Log"
+            run_with_spinner "Pakete installieren" apt-get install -y -qq                 curl wget git ufw python3 python3-pip python3-venv                 sudo htop net-tools lsof rsync openssl knockd dnsutils ||                 warn "Einige Pakete konnten nicht installiert werden – siehe Log"
             ;;
         dnf)
             run_with_spinner "Pakete aktualisieren" dnf update -y -q
@@ -804,11 +804,11 @@ BOOTEOF
             # Cron-Job für root (da ufw sudo braucht)
             CRON_JOB="*/5 * * * * $INSTALL_DIR/scripts/clownfischserver-homeip-updater.sh >> /var/log/clownfischserver-homeip.log 2>&1"
 
-            # Bestehende clownfischserver Cron-Jobs entfernen
-            sudo crontab -l 2>/dev/null | grep -v clownfischserver-homeip-updater | sudo crontab - 2>/dev/null || true
+            # Bestehende clownfischserver Cron-Jobs entfernen (install.sh läuft als root)
+            crontab -l 2>/dev/null | grep -v clownfischserver-homeip-updater | crontab - 2>/dev/null || true
 
             # Neuen Job hinzufügen
-            (sudo crontab -l 2>/dev/null; echo "$CRON_JOB") | sudo crontab - >> "$LOG_FILE" 2>&1
+            (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab - >> "$LOG_FILE" 2>&1
 
             ok "Cron-Job aktiviert: alle 5 Min HomeIP prüfen"
             info "Log: /var/log/clownfischserver-homeip.log"

@@ -28,16 +28,28 @@ if [[ ! -f "$ENV_FILE" ]]; then
     exit 1
 fi
 
-# Lade myfritz-Adresse aus .env
-MYFRITZ_DOMAIN=$(grep "^CLOWNFISCHSERVER_HOME_IP_DOMAIN=" "$ENV_FILE" | cut -d= -f2)
+# Erstelle Log-File wenn nicht existiert
+touch "$LOG_FILE" 2>/dev/null || true
+
+# Lade myfritz-Adresse aus .env (Zeilenumbrüche entfernen)
+MYFRITZ_DOMAIN=$(grep "^CLOWNFISCHSERVER_HOME_IP_DOMAIN=" "$ENV_FILE" | cut -d= -f2 | tr -d '\r\n')
 
 if [[ -z "$MYFRITZ_DOMAIN" ]]; then
     log "Clownfischserver HomeIP: Deaktiviert (keine myfritz-Adresse)"
     exit 0
 fi
 
-# Versuche IP aufzulösen
-NEW_IP=$(dig +short "$MYFRITZ_DOMAIN" A 2>/dev/null | tail -1 | grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b')
+# Versuche IP aufzulösen (mit Fallback)
+if command -v dig &>/dev/null; then
+    NEW_IP=$(dig +short "$MYFRITZ_DOMAIN" A 2>/dev/null | tail -1 | grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b')
+elif command -v nslookup &>/dev/null; then
+    NEW_IP=$(nslookup "$MYFRITZ_DOMAIN" 2>/dev/null | grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | tail -1)
+elif command -v getent &>/dev/null; then
+    NEW_IP=$(getent hosts "$MYFRITZ_DOMAIN" 2>/dev/null | awk '{print $1}')
+else
+    log_error "Kein DNS-Tool verfügbar (dig/nslookup/getent)"
+    exit 1
+fi
 
 if [[ -z "$NEW_IP" ]]; then
     log_error "DNS-Auflösung fehlgeschlagen: $MYFRITZ_DOMAIN"
@@ -61,10 +73,12 @@ fi
 # IP hat sich geändert oder ist neue Installation
 log "IP-Änderung erkannt! Updating ufw rules..."
 
-# Entferne alte Regel falls vorhanden
+# Entferne alte Regel falls vorhanden (mit y bestätigen für Cron)
 if [[ -n "$OLD_IP" ]]; then
-    if ufw status | grep -q "22/tcp.*ALLOW.*$OLD_IP"; then
-        ufw delete allow from "$OLD_IP" to any port 22 >> "$LOG_FILE" 2>&1
+    # Prüfe ob Regel existiert
+    if ufw status numbered | grep -qE "22.*ALLOW.*FROM\s+$OLD_IP"; then
+        # Löschen mit 'y' autom. bestätigen
+        echo "y" | ufw delete allow from "$OLD_IP" to any port 22 >> "$LOG_FILE" 2>&1
         log "Alte Regel entfernt: allow from $OLD_IP to port 22"
     fi
 fi
