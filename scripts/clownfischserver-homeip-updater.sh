@@ -3,6 +3,7 @@
 # 🐠 Clownfischserver HomeIP Updater
 # Version: v0.5.0
 # Purpose: Automatisch die Home-IP aktualisieren (alle 5 Min via Cron)
+# Multi-Distro: ufw (Ubuntu/Debian), firewalld (Fedora/openSUSE), iptables (Arch)
 # Author:  Mehlzoerwer-Claude
 # License: GPL-3.0
 # =============================================================================
@@ -21,6 +22,22 @@ log() {
 log_error() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" >> "$LOG_FILE"
 }
+
+# Erkenne welche Firewall aktiv ist
+detect_firewall() {
+    if systemctl is-active --quiet ufw 2>/dev/null; then
+        echo "ufw"
+    elif systemctl is-active --quiet firewalld 2>/dev/null; then
+        echo "firewalld"
+    elif command -v iptables &>/dev/null; then
+        echo "iptables"
+    else
+        echo "unknown"
+    fi
+}
+
+FIREWALL=$(detect_firewall)
+log "Firewall erkannt: $FIREWALL"
 
 # Prüfe ob .env existiert
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -71,29 +88,81 @@ if [[ "$NEW_IP" == "$OLD_IP" ]] && [[ -n "$OLD_IP" ]]; then
 fi
 
 # IP hat sich geändert oder ist neue Installation
-log "IP-Änderung erkannt! Updating ufw rules..."
+log "IP-Änderung erkannt! Aktualisiere Firewall-Regeln..."
 
-# Entferne alte Regel falls vorhanden (mit y bestätigen für Cron)
-if [[ -n "$OLD_IP" ]]; then
-    # Prüfe ob Regel existiert
-    if ufw status numbered | grep -qE "22.*ALLOW.*FROM\s+$OLD_IP"; then
-        # Löschen mit 'y' autom. bestätigen
-        echo "y" | ufw delete allow from "$OLD_IP" to any port 22 >> "$LOG_FILE" 2>&1
-        log "Alte Regel entfernt: allow from $OLD_IP to port 22"
+# Firewall-spezifische Funktionen
+remove_ufw_rule() {
+    if ufw status numbered | grep -qE "22.*ALLOW.*FROM\s+$1"; then
+        echo "y" | ufw delete allow from "$1" to any port 22 >> "$LOG_FILE" 2>&1
+        log "UFW: Alte Regel entfernt: allow from $1 to port 22"
     fi
+}
+
+add_ufw_rule() {
+    ufw allow from "$1" to any port 22 comment "clownfischserver-homeip-$MYFRITZ_DOMAIN" >> "$LOG_FILE" 2>&1
+    log "UFW: Neue Regel hinzugefügt: allow from $1 to port 22"
+}
+
+remove_firewalld_rule() {
+    firewall-cmd --permanent --remove-rich-rule="rule family='ipv4' source address='$1' port protocol='tcp' port='22' accept" >> "$LOG_FILE" 2>&1
+    log "firewalld: Alte Regel entfernt: source address $1 port 22"
+}
+
+add_firewalld_rule() {
+    firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='$1' port protocol='tcp' port='22' accept" >> "$LOG_FILE" 2>&1
+    firewall-cmd --reload >> "$LOG_FILE" 2>&1
+    log "firewalld: Neue Regel hinzugefügt: source address $1 port 22"
+}
+
+remove_iptables_rule() {
+    iptables -D INPUT -s "$1" -p tcp --dport 22 -j ACCEPT 2>> "$LOG_FILE" || true
+    log "iptables: Alte Regel entfernt: source $1 port 22"
+}
+
+add_iptables_rule() {
+    iptables -I INPUT -s "$1" -p tcp --dport 22 -j ACCEPT >> "$LOG_FILE" 2>&1
+    log "iptables: Neue Regel hinzugefügt: source $1 port 22"
+}
+
+# Entferne alte Regel falls vorhanden
+if [[ -n "$OLD_IP" ]]; then
+    case "$FIREWALL" in
+        ufw)      remove_ufw_rule "$OLD_IP" ;;
+        firewalld) remove_firewalld_rule "$OLD_IP" ;;
+        iptables) remove_iptables_rule "$OLD_IP" ;;
+        *)        log_error "Unbekannte Firewall: $FIREWALL" && exit 1 ;;
+    esac
 fi
 
 # Füge neue Regel hinzu
-if ufw allow from "$NEW_IP" to any port 22 comment "clownfischserver-homeip-$MYFRITZ_DOMAIN" >> "$LOG_FILE" 2>&1; then
-    log "Neue Regel hinzugefügt: allow from $NEW_IP to port 22"
-else
-    log_error "ufw Regel konnte nicht hinzugefügt werden"
-    exit 1
-fi
+case "$FIREWALL" in
+    ufw)
+        if ! add_ufw_rule "$NEW_IP"; then
+            log_error "UFW: Regel konnte nicht hinzugefügt werden"
+            exit 1
+        fi
+        ;;
+    firewalld)
+        if ! add_firewalld_rule "$NEW_IP"; then
+            log_error "firewalld: Regel konnte nicht hinzugefügt werden"
+            exit 1
+        fi
+        ;;
+    iptables)
+        if ! add_iptables_rule "$NEW_IP"; then
+            log_error "iptables: Regel konnte nicht hinzugefügt werden"
+            exit 1
+        fi
+        ;;
+    *)
+        log_error "Unbekannte Firewall: $FIREWALL"
+        exit 1
+        ;;
+esac
 
 # Speichere neue IP
 echo "$NEW_IP" > "$STATE_FILE"
 chmod 644 "$STATE_FILE"
 
-log "✓ HomeIP Update erfolgreich: $MYFRITZ_DOMAIN → $NEW_IP"
+log "✓ HomeIP Update erfolgreich: $MYFRITZ_DOMAIN → $NEW_IP ($FIREWALL)"
 exit 0

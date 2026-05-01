@@ -2,12 +2,26 @@
 
 Automatische SSH-Freigabe für deine Home-IP – ohne Port-Knocking.
 
+**Multi-Distro Support:** ✅ Ubuntu/Debian (ufw) | ✅ Fedora/RHEL (firewalld) | ✅ Arch/Manjaro (iptables) | ✅ openSUSE (firewalld)
+
 ## Wie es funktioniert
 
 1. **Installation:** `install.sh` fragt nach deiner myfritz-Adresse
 2. **Cron-Job:** Läuft alle 5 Minuten (root crontab)
 3. **DNS-Auflösung:** Löst `vorname.myfritz.net` auf
 4. **UFW-Update:** Aktualisiert die Firewall-Regel wenn IP sich ändert
+
+## Multi-Distro Firewall-Support
+
+| Distribution | Firewall | Support |
+|--------------|----------|---------|
+| Ubuntu/Debian | `ufw` | ✅ Vollständig |
+| Fedora/RHEL/CentOS | `firewalld` | ✅ Vollständig |
+| Arch/Manjaro | `iptables` | ✅ Vollständig |
+| openSUSE | `firewalld` | ✅ Vollständig |
+| Alpine | `ufw`/`iptables` | ✅ Fallback |
+
+**Automatische Erkennung:** Das Script erkennt die aktive Firewall zur Laufzeit und nutzt die entsprechenden Kommandos.
 
 ## Setup während Installation
 
@@ -26,6 +40,7 @@ Das Script wird dann automatisch:
 - In `/opt/clownfischserver/scripts/` installiert
 - Executable gemacht
 - In `root`-Crontab als 5-Minuten-Job eingetragen
+- **Firewall automatisch erkannt** (ufw/firewalld/iptables)
 
 ## Manuelle Verwaltung
 
@@ -129,6 +144,26 @@ sudo ufw allow from 1.2.3.4 to any port 22 comment "clownfischserver-homeip-test
 sudo journalctl -u ufw -n 20
 ```
 
+## Technische Details – Firewall-Kommandos
+
+### ufw (Ubuntu/Debian)
+```bash
+ufw allow from 192.168.1.100 to any port 22 comment "clownfischserver-homeip-vorname.myfritz.net"
+ufw delete allow from 192.168.1.100 to any port 22
+```
+
+### firewalld (Fedora/openSUSE)
+```bash
+firewall-cmd --permanent --add-rich-rule="rule family='ipv4' source address='192.168.1.100' port protocol='tcp' port='22' accept"
+firewall-cmd --reload
+```
+
+### iptables (Arch/Manjaro)
+```bash
+iptables -I INPUT -s 192.168.1.100 -p tcp --dport 22 -j ACCEPT
+iptables -D INPUT -s 192.168.1.100 -p tcp --dport 22 -j ACCEPT
+```
+
 ---
 
-**Script-Info:** Clownfischserver v0.5.0+ | GPL-3.0
+**Script-Info:** Clownfischserver v0.5.0+ | GPL-3.0 | Multi-Distro Support

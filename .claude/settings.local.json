@@ -13,7 +13,8 @@
       "Bash(python3 -m py_compile bot/*.py)",
       "Bash(awk '{print \"Datei: \" $1 \" Größe: \" $5 \" Bytes\"}')",
       "Bash(grep -oE '\\\\b\\([0-9]{1,3}\\\\.\\){3}[0-9]{1,3}\\\\b')",
-      "Bash(git commit -m 'Bugfix: Clownfischserver HomeIP Updater – Fehlerbehandlung & Fallbacks *)"
+      "Bash(git commit -m 'Bugfix: Clownfischserver HomeIP Updater – Fehlerbehandlung & Fallbacks *)",
+      "Bash(git commit -m 'Feature: Multi-Distro Firewall-Support für HomeIP Updater *)"
     ]
   }
 }
