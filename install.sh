@@ -335,6 +335,34 @@ KNOCKEOF
             warn "Bitte Firewall manuell einrichten (iptables/nftables)"
             ;;
     esac
+
+    echo ""
+    echo -e "  ${BOLD}${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${BOLD}  myfritz – Home-IP Auto-Update (optional)${NC}"
+    echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  Wenn du ein AVM-Gerät (Fritzbox) mit myfritz.net hast,"
+    echo -e "  kann der Bot deine Home-IP automatisch ins Firewall-Regelwerk"
+    echo -e "  schreiben. Das bedeutet: SSH bleibt immer erreichbar, auch"
+    echo -e "  wenn sich deine IP ändert (z.B. ISP, mobil, VPN)."
+    echo ""
+    echo -e "  ${YELLOW}?${NC} ${BOLD}Hast du ein AVM myfritz.net Gerät?${NC} [j/n]"
+    read -r -p "    -> " USE_MYFRITZ
+
+    if [[ "$USE_MYFRITZ" =~ ^[jJ]$ ]]; then
+        echo ""
+        echo -e "  ${YELLOW}?${NC} ${BOLD}Deine myfritz-Domain:${NC}"
+        echo -e "  ${CYAN}  Format: vorname.myfritz.net${NC}"
+        read -r -p "    -> " MYFRITZ_DOMAIN
+        if [[ -z "$MYFRITZ_DOMAIN" ]]; then
+            MYFRITZ_DOMAIN=""
+            warn "myfritz übersprungen"
+        else
+            ok "myfritz Domain: $MYFRITZ_DOMAIN"
+        fi
+    else
+        MYFRITZ_DOMAIN=""
+        info "myfritz übersprungen"
+    fi
 }
 
 # HELPER: Pull an Ollama model with progress bar
@@ -681,6 +709,7 @@ SNAPSHOT_METHOD=$SNAPSHOT_METHOD
 INSTALL_DIR=$INSTALL_DIR
 MGMT_USER=$MGMT_USER
 AIDER_WORKDIR=$WORKSPACE_DIR
+CLOWNFISCHSERVER_HOME_IP_DOMAIN=$MYFRITZ_DOMAIN
 ENVEOF
 
     chmod 600 "$INSTALL_DIR/config/.env"
@@ -762,6 +791,27 @@ BOOTEOF
 
     run_with_spinner "Boot-Notification aktivieren" bash -c "systemctl daemon-reload && systemctl enable clownfisch-boot"
     ok "Boot-Notification: Telegram-Meldung 2 Min nach Serverstart"
+
+    # HomeIP Updater – falls myfritz konfiguriert
+    if [[ -n "$MYFRITZ_DOMAIN" ]]; then
+        echo ""
+        info "Installiere HomeIP Auto-Updater (5-Min Cron)..."
+
+        # Copy the homeip-updater script if it exists
+        if [ -f "$SCRIPT_DIR/scripts/clownfischserver-homeip-updater.sh" ]; then
+            mkdir -p /opt/clownfischserver-scripts
+            cp "$SCRIPT_DIR/scripts/clownfischserver-homeip-updater.sh" /opt/clownfischserver-scripts/
+            chmod +x /opt/clownfischserver-scripts/clownfischserver-homeip-updater.sh
+
+            # Add cron job (every 5 minutes)
+            CRON_JOB="*/5 * * * * /opt/clownfischserver-scripts/clownfischserver-homeip-updater.sh >> /var/log/clownfischserver-homeip-updater.log 2>&1"
+            (crontab -l 2>/dev/null | grep -v "clownfischserver-homeip-updater" ; echo "$CRON_JOB") | crontab - 2>/dev/null || true
+
+            ok "HomeIP Auto-Updater installiert (myfritz: $MYFRITZ_DOMAIN)"
+        else
+            warn "homeip-updater Script nicht gefunden – übersprungen"
+        fi
+    fi
 }
 
 # ZUSAMMENFASSUNG
