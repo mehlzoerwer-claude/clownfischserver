@@ -29,8 +29,13 @@ MGMT_USER=""
 PKG_MANAGER=""
 DISTRO=""
 OLLAMA_MODEL=""
+OLLAMA_MODEL_FAST=""
 SNAPSHOT_METHOD="tar"
 OLLAMA_NUM_CTX=4096
+MYFRITZ_DOMAIN=""
+BOT_TOKEN=""
+CHAT_ID=""
+OPENROUTER_API_KEY=""
 
 # HELPERS
 
@@ -725,6 +730,13 @@ step_service() {
     cp -r "$SCRIPT_DIR/bot/"* "$INSTALL_DIR/bot/" || fail "Bot-Dateien nicht gefunden – ist der bot/ Ordner dabei?"
     ok "Bot-Dateien kopiert"
 
+    mkdir -p "$INSTALL_DIR/scripts"
+    if [ -d "$SCRIPT_DIR/scripts" ]; then
+        cp -r "$SCRIPT_DIR/scripts/"* "$INSTALL_DIR/scripts/" 2>/dev/null || true
+        chmod +x "$INSTALL_DIR/scripts/"*.sh 2>/dev/null || true
+        ok "Scripts kopiert"
+    fi
+
     chown -R "$MGMT_USER:$MGMT_USER" "$INSTALL_DIR" "$SNAPSHOT_DIR" "$WORKSPACE_DIR"
     chmod -R u+w "$INSTALL_DIR/bot"
     ok "Verzeichnis-Rechte gesetzt"
@@ -800,11 +812,11 @@ BOOTEOF
         # Copy the homeip-updater script if it exists
         if [ -f "$SCRIPT_DIR/scripts/clownfischserver-homeip-updater.sh" ]; then
             mkdir -p /opt/clownfischserver-scripts
-            cp "$SCRIPT_DIR/scripts/clownfischserver-homeip-updater.sh" /opt/clownfischserver-scripts/
-            chmod +x /opt/clownfischserver-scripts/clownfischserver-homeip-updater.sh
+            cp "$SCRIPT_DIR/scripts/clownfischserver-homeip-updater.sh" /opt/clownfischserver/scripts/
+            chmod +x /opt/clownfischserver/scripts/clownfischserver-homeip-updater.sh
 
             # Add cron job (every 5 minutes)
-            CRON_JOB="*/5 * * * * /opt/clownfischserver-scripts/clownfischserver-homeip-updater.sh >> /var/log/clownfischserver-homeip-updater.log 2>&1"
+            CRON_JOB="*/5 * * * * /opt/clownfischserver/scripts/clownfischserver-homeip-updater.sh >> /var/log/clownfischserver-homeip-updater.log 2>&1"
             (crontab -l 2>/dev/null | grep -v "clownfischserver-homeip-updater" ; echo "$CRON_JOB") | crontab - 2>/dev/null || true
 
             ok "HomeIP Auto-Updater installiert (myfritz: $MYFRITZ_DOMAIN)"
