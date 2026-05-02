@@ -750,8 +750,13 @@ def main():
 
     logger.info(f"Bot läuft. Authorized Chat-ID: {CHAT_ID}")
 
-    asyncio.set_event_loop(asyncio.new_event_loop())
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(app.initialize())
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
+    finally:
+        loop.run_until_complete(app.shutdown())
 
 if __name__ == "__main__":
     main()
