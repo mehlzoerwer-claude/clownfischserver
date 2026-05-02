@@ -105,7 +105,7 @@ print_banner() {
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════╗"
     echo "  ║          🐠  CLOWNFISCHSERVER  INSTALLER             ║"
-    echo "  ║              v0.4.13  |  GPL-3.0                      ║"
+    echo "  ║              v0.5.0  |  GPL-3.0                      ║"
     echo "  ╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo -e "  Willkommen! Dieses Script richtet deinen"
@@ -771,7 +771,7 @@ print_summary() {
     echo ""
     echo -e "${GREEN}${BOLD}"
     echo "  +======================================================+"
-    echo "  |        CLOWNFISCHSERVER BEREIT!  v0.4.13              |"
+    echo "  |        CLOWNFISCHSERVER BEREIT!  v0.5.0              |"
     echo "  +======================================================+"
     echo -e "${NC}"
     echo -e "  ${BOLD}Server:${NC}      $SERVER_IP"
@@ -862,7 +862,7 @@ main() {
         esac
     fi
 
-    log "=== Clownfischserver v0.4.13 Installation gestartet ==="
+    log "=== Clownfischserver v0.5.0 Installation gestartet ==="
     step_checks
     step_packages
     step_user

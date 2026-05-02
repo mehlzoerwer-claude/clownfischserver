@@ -98,7 +98,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fallback_info = "\n✅ OpenRouter Fallback aktiv"
 
     await update.message.reply_text(
-        f"🐠 *Clownfischserver v0.4.13 online.*{fallback_info}\n\n"
+        f"🐠 *Clownfischserver v0.5.0 online.*{fallback_info}\n\n"
         "Schreib mir einfach – ich antworte als Chat.\n\n"
         "*Befehle:*\n"
         "• `/shell <beschreibung>` – KI generiert Befehl, du bestätigst\n"
@@ -679,7 +679,7 @@ async def _handle_update_dialog(update, context, user_input, step):
 # =============================================================================
 
 def main():
-    logger.info("🐠 Clownfischserver v0.4.13 Bot startet...")
+    logger.info("🐠 Clownfischserver v0.5.0 Bot startet...")
 
     import requests as req
     import time
