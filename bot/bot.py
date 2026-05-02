@@ -678,7 +678,7 @@ async def _handle_update_dialog(update, context, user_input, step):
 # MAIN
 # =============================================================================
 
-async def main():
+def main():
     logger.info("🐠 Clownfischserver v0.5.0 Bot startet...")
 
     import requests as req
@@ -749,7 +749,10 @@ async def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
     logger.info(f"Bot läuft. Authorized Chat-ID: {CHAT_ID}")
-    await app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
