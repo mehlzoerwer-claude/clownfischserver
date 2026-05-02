@@ -6,7 +6,7 @@ Ein selbst-hostbarer, KI-gestützter Server-Manager der ausschließlich über Te
 
 ![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
 ![Platform: Linux](https://img.shields.io/badge/Platform-Linux-red.svg)
-![Version](https://img.shields.io/badge/Version-0.4.13-green.svg)
+![Version](https://img.shields.io/badge/Version-0.5.0-green.svg)
 ![Status](https://img.shields.io/badge/Status-Active%20Development-yellow.svg)
 
 ---
@@ -235,7 +235,7 @@ Nach jedem Server-Neustart bekommst du eine Telegram-Nachricht mit Status aller 
 
 ## Roadmap
 
-### Fertig (v0.1 – v0.4.13)
+### Fertig (v0.1 – v0.5.0)
 
 - [x] Basis-Installer mit geführtem Setup (8 Schritte)
 - [x] Telegram Bot mit Auth Guard (Single-User)
@@ -265,7 +265,7 @@ Nach jedem Server-Neustart bekommst du eine Telegram-Nachricht mit Status aller 
 - [x] DSGVO-Regel: `.env` nur per SSH, nie über Telegram lesbar
 - [x] Projekt-Kontext-Datei (CLOWNFISCHSERVER.md) für KI-gestütztes Pair-Programming
 
-### v0.5.0 – Geplant
+### v0.5.0 – Live 🎉
 
 **Sicherheit & DSGVO:**
 - [ ] Sensitive Dateien über Telegram blockieren (`.env`, `shadow`, Keys)

@@ -2,7 +2,7 @@
 
 > Diese Datei ist der zentrale Wissensspeicher für das Clownfischserver-Projekt.
 > Lade sie in jede KI/Chat-Session um sofort produktiv zu sein.
-> Letzte Aktualisierung: v0.4.13 (18.04.2026)
+> Letzte Aktualisierung: v0.5.0 (02.05.2026)
 
 ---
 
@@ -80,7 +80,7 @@ clownfischserver/
 - **Service:** `clownfisch.service` (Deutsch, mit "ch")
 - **Linux-User:** Beliebig (z.B. `clownfisch`, `clownfish`, `admin`) – wird aus `MGMT_USER` in `.env` gelesen
 - **Branding:** Immer "Clownfisch" (Deutsch)
-- **ZIP-Benennung:** `v0.4.13-clownfischserver-opus.zip`
+- **ZIP-Benennung:** `v0.5.0-clownfischserver.zip`
 
 ### Code-Stil
 - Python 3, keine Type Hints in Funktionssignaturen (außer Optional)
@@ -388,7 +388,7 @@ bash -n install.sh
 ### Schritt 2: ZIP erstellen
 ```bash
 cd ..  # Eine Ebene über clownfischserver/
-zip -r v0.4.13-clownfischserver-opus.zip clownfischserver/ -x "*__pycache__*" "*.pyc"
+zip -r v0.5.0-clownfischserver.zip clownfischserver/ -x "*__pycache__*" "*.pyc"
 ```
 
 **WICHTIG:**
@@ -400,7 +400,7 @@ zip -r v0.4.13-clownfischserver-opus.zip clownfischserver/ -x "*__pycache__*" "*
 
 ### Schritt 3: Verifizieren
 ```bash
-unzip -l v0.4.13-clownfischserver-opus.zip | head -30
+unzip -l v0.5.0-clownfischserver.zip | head -30
 # Muss zeigen: clownfischserver/bot/bot.py etc. (20 Dateien)
 ```
 
