@@ -13,8 +13,14 @@ import re
 import asyncio
 import requests
 from typing import Optional
+import time
 
 logger = logging.getLogger(__name__)
+
+MCP_VAULT_URL = os.getenv("MCP_VAULT_URL", "https://127.0.0.1:27124/vault")
+MCP_API_KEY = os.getenv("MCP_API_KEY", "")
+VAULT_CONTEXT_CACHE = {}
+VAULT_CONTEXT_TTL = 300  # 5 min – matches prompt cache TTL
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
@@ -78,6 +84,78 @@ def _extract_json(raw: str) -> dict:
             pass
 
     raise json.JSONDecodeError("No valid JSON found", text, 0)
+
+
+def _get_vault_context(query: Optional[str] = None) -> str:
+    """
+    Get project context from Obsidian vault via MCP.
+    Falls back to cached context if MCP unavailable.
+    Returns smaller, relevant snippets (not full Project-Memory).
+    """
+    cache_key = query or "full"
+    now = time.time()
+
+    # Check cache
+    if cache_key in VAULT_CONTEXT_CACHE:
+        cached_data, cached_time = VAULT_CONTEXT_CACHE[cache_key]
+        if now - cached_time < VAULT_CONTEXT_TTL:
+            logger.debug(f"Vault context cache HIT for: {cache_key}")
+            return cached_data
+
+    # Try MCP if configured
+    if MCP_API_KEY and MCP_VAULT_URL:
+        try:
+            headers = {"Authorization": f"Bearer {MCP_API_KEY}"}
+            if query:
+                # Smart filter: search for relevant notes
+                resp = requests.get(
+                    f"{MCP_VAULT_URL}/search",
+                    params={"query": query},
+                    headers=headers,
+                    verify=False,
+                    timeout=2
+                )
+                if resp.status_code == 200:
+                    results = resp.json()
+                    snippets = [r.get("snippet", "")[:200] for r in results[:3]]
+                    context = "\n---\n".join(filter(None, snippets))
+                    logger.info(f"Vault search: {query} → {len(context)} chars")
+                else:
+                    context = ""
+            else:
+                # Full project context (cached for 5 min)
+                resp = requests.get(
+                    f"{MCP_VAULT_URL}/Project-Memory.md",
+                    headers=headers,
+                    verify=False,
+                    timeout=3
+                )
+                if resp.status_code == 200:
+                    context = resp.text[:2000]  # Limit to 2K chars
+                    logger.info(f"Vault full context loaded: {len(context)} chars")
+                else:
+                    context = ""
+
+            if context:
+                VAULT_CONTEXT_CACHE[cache_key] = (context, now)
+                return context
+
+        except requests.exceptions.Timeout:
+            logger.warning("MCP vault timeout – using fallback context")
+        except Exception as e:
+            logger.warning(f"MCP vault error: {e} – using fallback")
+
+    # Fallback: hardcoded basic context (no external calls)
+    fallback = """# Clownfischserver Quick Reference
+- Projekt: Linux-Server-Manager via Telegram
+- OS: Ubuntu 24.04
+- Modelle: qwen2.5-coder:7b (shell), gemma3:4b (chat)
+- Port-Knocking: 7000→8000→9000
+- Snapshots: auto-cleanup nach 20
+- Vorsicht: /run zeigt alles, kein Filter noch"""
+
+    VAULT_CONTEXT_CACHE[cache_key] = (fallback, now)
+    return fallback
 
 
 class OllamaClient:

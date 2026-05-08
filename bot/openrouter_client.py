@@ -13,11 +13,14 @@ import re
 import asyncio
 import requests
 from typing import Optional
+import time
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+MCP_VAULT_URL = os.getenv("MCP_VAULT_URL", "https://127.0.0.1:27124/vault")
+MCP_API_KEY = os.getenv("MCP_API_KEY", "")
 
 # Free models on OpenRouter (no credit card needed)
 # openrouter/free auto-selects the best available free model
@@ -25,6 +28,9 @@ FREE_MODELS = {
     "coder": "openrouter/free",
     "chat": "openrouter/free",
 }
+
+VAULT_CONTEXT_CACHE = {}
+VAULT_CONTEXT_TTL = 300  # 5 min cache
 
 
 def _extract_json(raw: str) -> dict:
@@ -47,6 +53,51 @@ def _extract_json(raw: str) -> dict:
             pass
 
     raise json.JSONDecodeError("No valid JSON found", text, 0)
+
+
+def _get_vault_context(query: Optional[str] = None) -> str:
+    """Get smart context from Obsidian vault (for token optimization)."""
+    cache_key = query or "full"
+    now = time.time()
+
+    if cache_key in VAULT_CONTEXT_CACHE:
+        cached_data, cached_time = VAULT_CONTEXT_CACHE[cache_key]
+        if now - cached_time < VAULT_CONTEXT_TTL:
+            return cached_data
+
+    if MCP_API_KEY and MCP_VAULT_URL:
+        try:
+            headers = {"Authorization": f"Bearer {MCP_API_KEY}"}
+            if query:
+                resp = requests.get(
+                    f"{MCP_VAULT_URL}/search",
+                    params={"query": query},
+                    headers=headers,
+                    verify=False,
+                    timeout=2
+                )
+                if resp.status_code == 200:
+                    results = resp.json()
+                    snippets = [r.get("snippet", "")[:200] for r in results[:3]]
+                    context = "\n---\n".join(filter(None, snippets))
+            else:
+                resp = requests.get(
+                    f"{MCP_VAULT_URL}/Project-Memory.md",
+                    headers=headers,
+                    verify=False,
+                    timeout=3
+                )
+                context = resp.text[:2000] if resp.status_code == 200 else ""
+
+            if context:
+                VAULT_CONTEXT_CACHE[cache_key] = (context, now)
+                return context
+        except (requests.exceptions.Timeout, Exception):
+            pass
+
+    fallback = "Clownfischserver: Ubuntu 24.04, qwen2.5-coder:7b, gemma3:4b, Port-Knocking, Snapshots"
+    VAULT_CONTEXT_CACHE[cache_key] = (fallback, now)
+    return fallback
 
 
 class OpenRouterClient:
@@ -100,8 +151,11 @@ class OpenRouterClient:
             raise RuntimeError(f"OpenRouter Fehler: {e}")
 
     async def generate_shell_command(self, description: str) -> dict:
-        """Generate shell command via OpenRouter."""
+        """Generate shell command via OpenRouter (with smart context for token savings)."""
         loop = asyncio.get_running_loop()
+
+        vault_context = _get_vault_context("shell command, ubuntu, system")  # Smart filter
+        system = f"Server: Ubuntu 24.04, Clownfischserver setup.\n{vault_context}"
 
         prompt = (
             "You are a Linux bash command generator for Ubuntu 24.04.\n"
@@ -116,6 +170,7 @@ class OpenRouterClient:
                 None,
                 lambda: self._chat_sync(
                     messages=[{"role": "user", "content": prompt}],
+                    system=system,
                     model=FREE_MODELS["coder"],
                 ),
             )
@@ -134,15 +189,18 @@ class OpenRouterClient:
             raise
 
     async def chat(self, message: str, history: list = None) -> str:
-        """General chat via OpenRouter."""
+        """General chat via OpenRouter with smart vault context."""
         loop = asyncio.get_running_loop()
         messages = list(history) if history else []
         messages.append({"role": "user", "content": message})
 
-        system = (
+        base_system = (
             "Du bist der Clownfischserver KI-Assistent. Du hilfst beim Verwalten eines Linux-Servers.\n"
             "Antworte kurz und technisch. Antworte IMMER in der Sprache in der der Nutzer schreibt."
         )
+
+        vault_context = _get_vault_context(message[:50])  # Search for relevant context
+        system = f"{base_system}\n\n[Projekt-Kontext]\n{vault_context}"
 
         try:
             return await loop.run_in_executor(

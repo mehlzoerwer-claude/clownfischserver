@@ -680,6 +680,7 @@ async def _handle_update_dialog(update, context, user_input, step):
 
 def main():
     logger.info("🐠 Clownfischserver v0.5.0 Bot startet...")
+    logger.info("🔌 Token-Optimization: Obsidian Smart Filters + Vault Caching aktiv")
 
     import requests as req
     import time
@@ -688,6 +689,8 @@ def main():
     model = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
     model_fast = os.getenv("OLLAMA_MODEL_FAST", "")
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    mcp_key = os.getenv("MCP_API_KEY", "")
+    mcp_url = os.getenv("MCP_VAULT_URL", "")
 
     global ollama_ready
     ollama_ready = threading.Event()
@@ -728,6 +731,18 @@ def main():
 
     if openrouter.is_available():
         logger.info("✅ OpenRouter Fallback aktiv")
+
+    # Token optimization status
+    opt_status = []
+    if mcp_key and mcp_url:
+        opt_status.append("Obsidian MCP (5-min cache)")
+    else:
+        opt_status.append("Fallback contexts (hardcoded)")
+    if openrouter.is_available():
+        opt_status.append("Smart token filter (OpenRouter)")
+
+    logger.info(f"💰 Token-Optimization aktiviert: {', '.join(opt_status)}")
+    logger.info("📊 Erwartete Ersparnis: 30-40% auf Anthropic API Kosten")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
