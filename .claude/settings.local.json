@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth *)",
+      "PowerShell(gh auth *)",
+      "PowerShell(winget install *)",
+      "Bash(gh repo *)",
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'Initial commit: Clownfischserver v0.5.0 *)",
+      "Bash(git config *)"
+    ]
+  }
+}

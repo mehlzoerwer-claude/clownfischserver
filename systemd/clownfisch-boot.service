@@ -1,0 +1,18 @@
+[Unit]
+Description=🐠 Clownfischserver Boot Notification
+Documentation=https://github.com/mehlzoerwer-claude/clownfischserver
+After=network-online.target clownfisch.service ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 120
+ExecStart=/opt/clownfischserver/venv/bin/python3 /opt/clownfischserver/bot/boot_notify.py
+EnvironmentFile=/opt/clownfischserver/config/.env
+WorkingDirectory=/opt/clownfischserver
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=clownfisch-boot
+
+[Install]
+WantedBy=multi-user.target
