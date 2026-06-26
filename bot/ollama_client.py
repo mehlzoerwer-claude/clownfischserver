@@ -81,10 +81,14 @@ def _extract_json(raw: str) -> dict:
 
 
 class OllamaClient:
-    def __init__(self, openrouter_client=None):
-        self.base_url = OLLAMA_BASE_URL
-        self.model = OLLAMA_MODEL
-        self.model_fast = OLLAMA_MODEL_FAST or OLLAMA_MODEL
+    def __init__(self, openrouter_client=None, model: Optional[str] = None,
+                 model_fast: Optional[str] = None,
+                 num_ctx: Optional[int] = None,
+                 base_url: Optional[str] = None):
+        self.base_url = base_url or OLLAMA_BASE_URL
+        self.model = model or OLLAMA_MODEL
+        self.model_fast = model_fast or OLLAMA_MODEL_FAST or self.model
+        self.num_ctx = num_ctx if num_ctx is not None else OLLAMA_NUM_CTX
         self.openrouter = openrouter_client
 
     def _chat_sync(self, messages: list, system: Optional[str] = None, think: Optional[bool] = None, use_fast: bool = False) -> str:
@@ -95,7 +99,7 @@ class OllamaClient:
             "messages": messages,
             "stream": False,
             "keep_alive": -1,
-            "options": {"num_ctx": OLLAMA_NUM_CTX},
+            "options": {"num_ctx": self.num_ctx},
         }
         if system:
             payload["system"] = system

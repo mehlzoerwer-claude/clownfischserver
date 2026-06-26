@@ -45,10 +45,82 @@ Das Ziel: **Server-Administration so einfach wie eine Chat-Nachricht.** Heute ei
 - 🔔 **Benachrichtigungen** – SSH-Zugang, Server-Boot, Knock-Versuche via Telegram
 - 📦 **Self-Update via Telegram** – ZIP an den Bot schicken, fertig (inkl. systemd-Services)
 - ☁️ **OpenRouter Fallback** – kostenlose Cloud-Modelle als Backup wenn Ollama nicht verfügbar
+- 👥 **Team-Rollen** *(v0.5.0)* – `operator` / `approver` / `viewer` mit Inheritance, env-gesteuert
+- 📜 **Audit-Trail** *(v0.5.0)* – jeder privilegierte Vorgang in `audit.jsonl`, abfragbar via `/logs`, Retention konfigurierbar
+- 🔀 **LLM-Router** *(v0.5.0)* – Primary/Fallback-Chain via `LLM_PRIMARY_PROVIDER` etc.; pro Provider eigenes Kontextfenster
 - 👤 **Eigener User** – beliebiger Name, passwordless sudo, wird überall korrekt eingesetzt
 - 🌍 **Mehrsprachig** – antwortet in der Sprache in der du schreibst
 - 🐧 **Multi-Distro** – Debian, Ubuntu, Fedora, Arch (Installer)
-- 🔒 **DSGVO by design** – lokal ist Standard, Cloud ist Opt-in
+- 🔒 **DSGVO by design** – lokal ist Standard, Cloud ist Opt-in (siehe [DSGVO.md](DSGVO.md))
+
+---
+
+## For Enterprise Teams (v0.5.0)
+
+Clownfischserver v0.5.0 ist als **Gateway für Teams mit lokal gehosteten
+LLMs** positioniert. Wenn ihr Claude Opus, Qwen 32B oder Gemma 4 auf eigener
+Hardware betreibt, gibt euch v0.5.0:
+
+### Rollenbasierte Zugriffskontrolle
+
+Drei Rollen mit Inheritance (`operator` ⊃ `approver` ⊃ `viewer`):
+
+```dotenv
+# .env
+CLOWNFISCH_OPERATORS=12345,67890   # dürfen /shell /code /run /ssh /ja /snapshot /rollback
+CLOWNFISCH_APPROVERS=11111         # dürfen /ja (Bestätigungen)
+CLOWNFISCH_VIEWERS=22222,33333     # dürfen /status /snapshots /help + Chat
+```
+
+Wer keine Rolle hat, wird abgelehnt – inklusive Audit-Eintrag mit
+`result: denied`. Backwards-kompatibel: ohne Rollen-Vars wird die alte
+`TELEGRAM_CHAT_ID` automatisch zu `operator`.
+
+### Audit-Trail nach DSGVO Art. 5 + 32
+
+Jeder Vorgang wird in `audit.jsonl` als JSONL-Eintrag protokolliert:
+
+```jsonl
+{"ts":"2026-06-04T14:21:03+00:00","user_id":"12345","action":"shell.execute","result":"ok","role":"operator","details":{"command":"systemctl restart nginx","returncode":0}}
+{"ts":"2026-06-04T14:21:07+00:00","action":"llm.route","result":"hit","details":{"tier":"primary","provider":"ollama","model":"qwen2.5-coder:7b","method":"chat"}}
+```
+
+Operatoren fragen den Trail direkt aus Telegram ab:
+
+```text
+/logs                          # letzte 20 Einträge
+/logs user 12345 days 7        # User-Aktivität, letzte 7 Tage
+/logs prefix shell. result error
+/logs action llm.route limit 50
+```
+
+Retention via `AUDIT_RETENTION_DAYS` (Default 90 Tage, beim Bot-Start automatisch).
+
+### Konfigurierbares LLM-Routing
+
+Primary/Fallback-Chain via Env – kein Auto-Selection, keine Halluzinationen:
+
+```dotenv
+# Primary: lokal, sensitive Daten bleiben on-prem
+LLM_PRIMARY_PROVIDER=ollama
+LLM_PRIMARY_MODEL=qwen2.5-coder:7b
+LLM_PRIMARY_NUM_CTX=65536      # z. B. Gemma 4 27B braucht 64K+
+
+# Fallback nur für non-sensitive Tasks
+LLM_FALLBACK_PROVIDER=openrouter
+LLM_FALLBACK_MODEL=deepseek/deepseek-r1:free
+
+# Fallback komplett deaktivieren:
+# LLM_FALLBACK_PROVIDER=none
+```
+
+Routable Errors (Timeout, Connection-Refused) lösen Fallback aus; harte
+Fehler (JSON-Parse, Bad API Key) propagieren – ohne stille Modellwechsel.
+
+### Vollständige Compliance-Dokumentation
+
+Siehe **[DSGVO.md](DSGVO.md)** – aufgeschlüsselt nach Art. 5 + 32 mit
+Referenzen auf den konkreten Code.
 
 ---
 

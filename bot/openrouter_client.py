@@ -53,7 +53,9 @@ class OpenRouterClient:
     """OpenRouter Free Models Client – fallback when Ollama times out."""
 
     def __init__(self):
-        self.api_key = OPENROUTER_API_KEY
+        # Read at construction time, not import time, so env changes between
+        # boot and config reloads (or test monkeypatching) take effect.
+        self.api_key = os.getenv("OPENROUTER_API_KEY", "") or OPENROUTER_API_KEY
         self.base_url = OPENROUTER_BASE_URL
         if self.api_key:
             logger.info("OpenRouter Fallback konfiguriert")
