@@ -1,0 +1,33 @@
+# Secrets – NIEMALS committen!
+config/.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Logs
+*.log
+/var/log/
+
+# Snapshots
+/opt/clownfisch-snapshots/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temp
+tmp/
+temp/
+*.tmp
