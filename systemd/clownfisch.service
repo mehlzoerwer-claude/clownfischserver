@@ -1,0 +1,26 @@
+[Unit]
+Description=🐠 Clownfischserver Telegram Bot
+Documentation=https://github.com/mehlzoerwer-claude/clownfischserver
+After=network-online.target ollama.service
+Wants=network-online.target ollama.service
+
+[Service]
+Type=simple
+User=clownfish
+Group=clownfish
+WorkingDirectory=/opt/clownfischserver
+EnvironmentFile=/opt/clownfischserver/config/.env
+ExecStart=/opt/clownfischserver/venv/bin/python3 /opt/clownfischserver/bot/bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=clownfisch
+
+# Security – allow sudo and iptables for SSH management
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
+SecureBits=keep-caps
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
